@@ -238,6 +238,25 @@ impl Encoder {
         Ok(())
     }
 
+    /// Reset the internal codec state / flush internal buffers.
+    /// Should be called e.g. when seeking or when switching to a different stream.
+    /// Check if the encoder supports flushing by calling `has_flush_capability`.
+    pub fn flush_buffers(&mut self) -> Result<(), FfmpegError> {
+        // Safety: `self.encoder` is a valid pointer.
+        unsafe { avcodec_flush_buffers(self.encoder.as_mut_ptr()) };
+        Ok(())
+    }
+
+    /// Check if the encoder supports flushing.
+    pub fn has_flush_capability(&self) -> bool {
+        // Safety: `self.encoder` is a valid pointer.
+        unsafe {
+            let ctx = self.encoder.as_deref_except();
+            let codec = ctx.codec.as_ref().unwrap();
+            codec.capabilities & AV_CODEC_CAP_ENCODER_FLUSH as i32 != 0
+        }
+    }
+
     /// Sends a frame to the encoder.
     pub fn send_frame(&mut self, frame: &GenericFrame) -> Result<(), FfmpegError> {
         // Safety: `self.encoder` and `frame` are valid pointers.
