@@ -292,6 +292,11 @@ impl Encoder {
     pub const fn outgoing_time_base(&self) -> Rational {
         self.outgoing_time_base
     }
+
+    /// Returns the codec context of the encoder.
+    pub fn codec_context(&self) -> *const AVCodecContext {
+        self.encoder.as_ptr()
+    }
 }
 
 #[cfg(test)]
