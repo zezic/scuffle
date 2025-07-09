@@ -4,6 +4,7 @@ use crate::codec::DecoderCodec;
 use crate::error::{FfmpegError, FfmpegErrorCode};
 use crate::ffi::*;
 use crate::frame::{AudioFrame, GenericFrame, VideoFrame};
+use crate::hardware::{HardwareConfig, HardwareContext, find_hw_config_for_codec, get_hw_format};
 use crate::packet::Packet;
 use crate::rational::Rational;
 use crate::smart_object::SmartPtr;
@@ -24,6 +25,8 @@ pub enum Decoder {
 /// A generic decoder that can be used to decode any type of media.
 pub struct GenericDecoder {
     decoder: SmartPtr<AVCodecContext>,
+    hardware_context: Option<HardwareContext>,
+    auto_transfer: bool,
 }
 
 /// Safety: `GenericDecoder` can be sent between threads.
@@ -74,6 +77,8 @@ pub struct DecoderOptions {
     pub codec: Option<DecoderCodec>,
     /// The number of threads to use for decoding.
     pub thread_count: i32,
+    /// Hardware acceleration configuration.
+    pub hardware: HardwareConfig,
 }
 
 /// The default options for a [`Decoder`].
@@ -82,7 +87,46 @@ impl Default for DecoderOptions {
         Self {
             codec: None,
             thread_count: 1,
+            hardware: HardwareConfig::default(),
         }
+    }
+}
+
+impl DecoderOptions {
+    /// Create decoder options with CUDA hardware acceleration.
+    pub fn with_cuda() -> Self {
+        Self {
+            codec: None,
+            thread_count: 1,
+            hardware: HardwareConfig::cuda(),
+        }
+    }
+
+    /// Create decoder options with VA-API hardware acceleration.
+    pub fn with_vaapi() -> Self {
+        Self {
+            codec: None,
+            thread_count: 1,
+            hardware: HardwareConfig::vaapi(),
+        }
+    }
+
+    /// Set the hardware configuration.
+    pub fn with_hardware(mut self, hardware: HardwareConfig) -> Self {
+        self.hardware = hardware;
+        self
+    }
+
+    /// Set the codec.
+    pub fn with_codec(mut self, codec: DecoderCodec) -> Self {
+        self.codec = Some(codec);
+        self
+    }
+
+    /// Set the thread count.
+    pub fn with_thread_count(mut self, thread_count: i32) -> Self {
+        self.thread_count = thread_count;
+        self
     }
 }
 
@@ -127,6 +171,29 @@ impl Decoder {
         decoder_mut.time_base = ist.time_base().into();
         decoder_mut.thread_count = options.thread_count;
 
+        // Setup hardware acceleration if requested
+        let hardware_context = if options.hardware.is_hardware_accelerated() {
+            // Check if codec supports the requested hardware acceleration
+            let hw_pixel_format =
+                find_hw_config_for_codec(codec.as_ptr(), options.hardware.device_type).ok_or(FfmpegError::NoDecoder)?;
+
+            // Create hardware context
+            let hw_ctx = HardwareContext::new(options.hardware.device_type, options.hardware.device.as_deref())?;
+
+            // Set up hardware device context
+            decoder_mut.hw_device_ctx = hw_ctx.reference()?.as_ptr() as *mut AVBufferRef;
+
+            // Set up pixel format callback
+            decoder_mut.get_format = Some(get_hw_format);
+
+            // Store the hardware pixel format in the context's opaque pointer
+            decoder_mut.opaque = Box::into_raw(Box::new(i32::from(hw_pixel_format))) as *mut std::ffi::c_void;
+
+            Some(hw_ctx)
+        } else {
+            None
+        };
+
         if AVMediaType(decoder_mut.codec_type) == AVMediaType::Video {
             // Safety: Even though we are upcasting `AVFormatContext` from a const pointer to a
             // mutable pointer, it is still safe becasuse av_guess_frame_rate does not use
@@ -145,9 +212,19 @@ impl Decoder {
             FfmpegErrorCode(unsafe { avcodec_open2(decoder_mut, codec.as_ptr(), std::ptr::null_mut()) }).result()?;
         }
 
+        let auto_transfer = options.hardware.auto_transfer;
+
         Ok(match AVMediaType(decoder_mut.codec_type) {
-            AVMediaType::Video => Self::Video(VideoDecoder(GenericDecoder { decoder })),
-            AVMediaType::Audio => Self::Audio(AudioDecoder(GenericDecoder { decoder })),
+            AVMediaType::Video => Self::Video(VideoDecoder(GenericDecoder {
+                decoder,
+                hardware_context,
+                auto_transfer,
+            })),
+            AVMediaType::Audio => Self::Audio(AudioDecoder(GenericDecoder {
+                decoder,
+                hardware_context,
+                auto_transfer,
+            })),
             _ => Err(FfmpegError::NoDecoder)?,
         })
     }
@@ -243,8 +320,25 @@ impl VideoDecoder {
     }
 
     /// Receives a frame from the decoder.
+    ///
+    /// If hardware acceleration is enabled and auto_transfer is true,
+    /// hardware frames will be automatically transferred to system memory.
     pub fn receive_frame(&mut self) -> Result<Option<VideoFrame>, FfmpegError> {
-        Ok(self.0.receive_frame()?.map(|frame| frame.video()))
+        if let Some(generic_frame) = self.0.receive_frame()? {
+            let mut video_frame = generic_frame.video();
+
+            // Check if this is a hardware frame that needs to be transferred
+            if let Some(ref hw_ctx) = self.0.hardware_context {
+                if hw_ctx.is_hw_frame(&video_frame) && self.0.auto_transfer {
+                    // Transfer from hardware to system memory
+                    video_frame = hw_ctx.transfer_data_from_hw(&video_frame)?;
+                }
+            }
+
+            Ok(Some(video_frame))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -330,6 +424,7 @@ mod tests {
         let decoder_options = DecoderOptions {
             codec: Some(DecoderCodec::new(AVCodecID::H264).expect("Failed to find H264 codec")),
             thread_count: 2,
+            hardware: crate::hardware::HardwareConfig::default(),
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let generic_decoder = match decoder {
@@ -371,8 +466,9 @@ mod tests {
         );
 
         let decoder_options = DecoderOptions {
-            codec: Some(DecoderCodec::new(AVCodecID::H264).expect("Failed to find H264 codec")),
+            codec: Some(DecoderCodec::new(AVCodecID::Aac).expect("Failed to find AAC codec")),
             thread_count: 2,
+            hardware: crate::hardware::HardwareConfig::default(),
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
 
@@ -426,6 +522,7 @@ mod tests {
         let decoder_options = DecoderOptions {
             codec: Some(DecoderCodec::new(AVCodecID::Aac).expect("Failed to find AAC codec")),
             thread_count: 2,
+            hardware: crate::hardware::HardwareConfig::default(),
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let audio_decoder = match decoder {
@@ -551,6 +648,7 @@ mod tests {
         let decoder_options = DecoderOptions {
             codec: None,
             thread_count: 2,
+            hardware: crate::hardware::HardwareConfig::default(),
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let mut video_decoder = match decoder {
@@ -587,6 +685,7 @@ mod tests {
         let decoder_options = DecoderOptions {
             codec: None,
             thread_count: 2,
+            hardware: crate::hardware::HardwareConfig::default(),
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let mut audio_decoder = match decoder {
@@ -654,5 +753,85 @@ mod tests {
 
         insta::assert_debug_snapshot!("test_decoder_video", video_frames);
         insta::assert_debug_snapshot!("test_decoder_audio", audio_frames);
+    }
+
+    #[test]
+    fn test_decoder_options_with_cuda() {
+        let options = DecoderOptions::with_cuda();
+        assert!(options.hardware.is_hardware_accelerated());
+        assert_eq!(options.hardware.device_type, crate::AVHWDeviceType::Cuda);
+        assert!(options.hardware.auto_transfer);
+    }
+
+    #[test]
+    fn test_decoder_options_with_vaapi() {
+        let options = DecoderOptions::with_vaapi();
+        assert!(options.hardware.is_hardware_accelerated());
+        assert_eq!(options.hardware.device_type, crate::AVHWDeviceType::Vaapi);
+        assert!(options.hardware.auto_transfer);
+    }
+
+    #[test]
+    fn test_decoder_options_builder() {
+        let options = DecoderOptions::default()
+            .with_hardware(crate::hardware::HardwareConfig::cuda())
+            .with_thread_count(4);
+
+        assert!(options.hardware.is_hardware_accelerated());
+        assert_eq!(options.hardware.device_type, crate::AVHWDeviceType::Cuda);
+        assert_eq!(options.thread_count, 4);
+    }
+
+    #[test]
+    fn test_hardware_config_cuda() {
+        let config = crate::hardware::HardwareConfig::cuda();
+        assert_eq!(config.device_type, crate::AVHWDeviceType::Cuda);
+        assert!(config.auto_transfer);
+        assert!(config.is_hardware_accelerated());
+    }
+
+    #[test]
+    fn test_hardware_config_with_device() {
+        let config = crate::hardware::HardwareConfig::cuda().with_device("/dev/nvidia0");
+        assert_eq!(config.device, Some("/dev/nvidia0".to_string()));
+    }
+
+    #[test]
+    fn test_hardware_config_with_auto_transfer() {
+        let config = crate::hardware::HardwareConfig::cuda().with_auto_transfer(false);
+        assert!(!config.auto_transfer);
+    }
+
+    #[test]
+    fn test_hw_device_type_display() {
+        assert_eq!(format!("{}", crate::AVHWDeviceType::Cuda), "cuda");
+        assert_eq!(format!("{}", crate::AVHWDeviceType::Vaapi), "vaapi");
+        assert_eq!(format!("{}", crate::AVHWDeviceType::None), "none");
+    }
+
+    #[test]
+    fn test_hw_device_type_name() {
+        assert_eq!(crate::AVHWDeviceType::Cuda.name(), Some("cuda"));
+        assert_eq!(crate::AVHWDeviceType::Vaapi.name(), Some("vaapi"));
+        // None type may not have a name in FFmpeg
+        let none_name = crate::AVHWDeviceType::None.name();
+        assert!(none_name.is_none() || none_name == Some("none"));
+    }
+
+    #[test]
+    fn test_hw_device_type_find_by_name() {
+        assert_eq!(crate::AVHWDeviceType::find_by_name("cuda"), Some(crate::AVHWDeviceType::Cuda));
+        assert_eq!(
+            crate::AVHWDeviceType::find_by_name("vaapi"),
+            Some(crate::AVHWDeviceType::Vaapi)
+        );
+        assert_eq!(crate::AVHWDeviceType::find_by_name("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_hw_device_type_iter() {
+        let types: Vec<_> = crate::AVHWDeviceType::iter_types().collect();
+        assert!(!types.is_empty());
+        assert!(!types.contains(&crate::AVHWDeviceType::None));
     }
 }

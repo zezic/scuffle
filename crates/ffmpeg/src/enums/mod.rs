@@ -36,3 +36,6 @@ pub use av_pkt_flags::*;
 
 mod av_discard;
 pub use av_discard::*;
+
+mod av_hw_device_type;
+pub use av_hw_device_type::*;

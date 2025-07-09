@@ -49,6 +49,11 @@ nutype_enum! {
         /// Corresponds to `AV_PIX_FMT_YUV444P`.
         Yuv444p = AV_PIX_FMT_YUV444P as _,
 
+        /// Planar YUV 4:2:0 format with interleaved UV plane.
+        /// 12 bits per pixel, Y plane followed by interleaved U and V samples.
+        /// Corresponds to `AV_PIX_FMT_NV12`.
+        Nv12 = AV_PIX_FMT_NV12 as _,
+
         /// 8-bit grayscale format, 8 bits per pixel.
         /// Corresponds to `AV_PIX_FMT_GRAY8`.
         Gray8 = AV_PIX_FMT_GRAY8 as _,
@@ -146,6 +151,10 @@ nutype_enum! {
         /// Hardware-accelerated format through VA-API.
         /// Corresponds to `AV_PIX_FMT_VAAPI`.
         Vaapi = AV_PIX_FMT_VAAPI as _,
+
+        /// Hardware-accelerated format through CUDA.
+        /// Corresponds to `AV_PIX_FMT_CUDA`.
+        Cuda = AV_PIX_FMT_CUDA as _,
 
         /// Planar GBR format, 4:4:4 subsampling.
         /// Corresponds to `AV_PIX_FMT_GBRP`.
