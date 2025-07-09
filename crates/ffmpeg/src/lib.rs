@@ -89,6 +89,95 @@
 //! # test_fn().expect("failed to run test");
 //! ```
 //!
+//! ### Hardware-accelerated decoding
+//!
+//! This crate supports hardware acceleration for decoding, with built-in support for CUDA and other backends.
+//! Hardware acceleration can significantly improve performance for video decoding operations.
+//!
+//! #### Quick Start with CUDA
+//!
+//! ```rust
+//! # use std::path::PathBuf;
+//! # use scuffle_ffmpeg::{AVMediaType, decoder::{Decoder, DecoderOptions}};
+//! # use scuffle_ffmpeg::hardware::HardwareConfig;
+//! # fn test_fn() -> Result<(), Box<dyn std::error::Error>> {
+//! # let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets").join("avc_aac.mp4");
+//! // 1. Open input file
+//! let mut input = scuffle_ffmpeg::io::Input::seekable(std::fs::File::open(path)?)?;
+//! let streams = input.streams();
+//!
+//! // 2. Find video stream
+//! let video_stream = streams.best(AVMediaType::Video).expect("no video stream found");
+//!
+//! // 3. Create decoder with CUDA hardware acceleration
+//! let decoder_options = DecoderOptions::with_cuda();
+//! let mut video_decoder = Decoder::with_options(&video_stream, decoder_options)?
+//!     .video()
+//!     .expect("not a video decoder");
+//!
+//! // 4. Process frames - hardware frames are automatically transferred to system memory
+//! let video_stream_index = video_stream.index();
+//! for packet in input.packets() {
+//!     let packet = packet?;
+//!     if packet.stream_index() == video_stream_index {
+//!         video_decoder.send_packet(&packet)?;
+//!         while let Some(frame) = video_decoder.receive_frame()? {
+//!             // Frame is automatically transferred to system memory
+//!             println!("Decoded frame: {}x{}, format: {:?}",
+//!                      frame.width(), frame.height(), frame.format());
+//!         }
+//!     }
+//! }
+//!
+//! // 5. Flush decoder
+//! video_decoder.send_eof()?;
+//! while let Some(frame) = video_decoder.receive_frame()? {
+//!     println!("Flushed frame: {}x{}", frame.width(), frame.height());
+//! }
+//! # Ok(())
+//! # }
+//! # test_fn().expect("failed to run test");
+//! ```
+//!
+//! #### Advanced Hardware Configuration
+//!
+//! ```rust
+//! # use scuffle_ffmpeg::hardware::{HardwareConfig, HardwareContext};
+//! # use scuffle_ffmpeg::AVHWDeviceType;
+//! # fn test_fn() -> Result<(), Box<dyn std::error::Error>> {
+//! // Check available hardware device types
+//! println!("Available hardware acceleration:");
+//! for hw_type in AVHWDeviceType::iter_types() {
+//!     if let Some(name) = hw_type.name() {
+//!         println!("  - {}", name);
+//!     }
+//! }
+//!
+//! // Create custom hardware configuration
+//! let hw_config = HardwareConfig::cuda()
+//!     .with_device("/dev/nvidia0")     // Optional: specify device
+//!     .with_auto_transfer(false);      // Manual frame transfer control
+//!
+//! // Manual frame transfer example
+//! let hw_context = HardwareContext::new(AVHWDeviceType::Cuda, None)?;
+//! // ... decode frames ...
+//! // if hw_context.is_hw_frame(&frame) {
+//! //     let sw_frame = hw_context.transfer_data_from_hw(&frame)?;
+//! // }
+//! # Ok(())
+//! # }
+//! # test_fn().expect("failed to run test");
+//! ```
+//!
+//! #### Supported Hardware Backends
+//!
+//! - **CUDA**: NVIDIA GPU acceleration (requires CUDA-capable GPU and drivers)
+//! - **VA-API**: Intel/AMD GPU acceleration on Linux
+//! - **VDPAU**: NVIDIA GPU acceleration on Linux
+//! - **VideoToolbox**: Apple hardware acceleration on macOS/iOS
+//! - **D3D11VA/D3D12VA**: Microsoft hardware acceleration on Windows
+//! - **QSV**: Intel Quick Sync Video
+//!
 //! ### Re-encoding a audio/video file
 //!
 //! ```rust
@@ -256,6 +345,8 @@ pub mod error;
 pub mod filter_graph;
 /// Frame specific functionality.
 pub mod frame;
+/// Hardware acceleration functionality.
+pub mod hardware;
 /// Input/Output specific functionality.
 pub mod io;
 /// Logging specific functionality.
