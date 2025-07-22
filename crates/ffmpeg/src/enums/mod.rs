@@ -16,6 +16,9 @@ pub use av_sample_format::*;
 mod av_fmt_flags;
 pub use av_fmt_flags::*;
 
+mod av_hwdevice_type;
+pub use av_hwdevice_type::*;
+
 mod av_picture_type;
 pub use av_picture_type::*;
 
