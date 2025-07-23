@@ -25,7 +25,6 @@ fn main() -> Result<(), FfmpegError> {
     let mut av_codec_ptr = ptr::null();
     let mut_ptr_to_ptr = &mut av_codec_ptr as *mut *const AVCodec;
     let _stream = unsafe { av_find_best_stream(av_format_ctx, AVMediaType::Video.into(), -1, -1, mut_ptr_to_ptr, 0) };
-
     let decoder_codec = unsafe { DecoderCodec::from_ptr(av_codec_ptr) };
 
     let c_name = std::ffi::CString::new(hw_device_type_name).ok().unwrap();
