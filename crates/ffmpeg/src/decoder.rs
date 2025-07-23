@@ -326,11 +326,24 @@ impl VideoDecoder {
                 if format == hw_pix_fmt {
                     // Transfer data from GPU to CPU
                     let mut sw_frame = GenericFrame::new()?;
+                    let ptr = sw_frame.as_mut_ptr();
+
+                    // Safety: `ptr` is a valid non-null pointer to AVFrame allocated by GenericFrame::new().
+                    // The pointer comes from sw_frame.as_mut_ptr() which guarantees it points to valid memory.
+                    let avframe = unsafe { ptr.as_mut() }.unwrap();
+                    // Yuv420p is needed for x264 encoding later, we can request it by setting the format on the empty frame
+                    avframe.format = AVPixelFormat::Yuv420p.into();
+
                     // Safety: Both frame pointers are valid - `frame` comes from successful decode,
                     // `sw_frame` was just allocated. av_hwframe_transfer_data copies frame data
                     // from hardware memory to system memory.
                     let ret = unsafe { av_hwframe_transfer_data(sw_frame.as_mut_ptr(), frame.as_ptr(), 0) };
                     FfmpegErrorCode(ret).result()?;
+                    sw_frame.set_dts(frame.dts());
+                    sw_frame.set_pts(frame.pts());
+                    sw_frame.set_duration(frame.duration());
+                    sw_frame.set_time_base(frame.time_base());
+
                     Some(sw_frame.video())
                 } else {
                     Some(frame.video())
