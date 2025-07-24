@@ -39,10 +39,8 @@ impl std::fmt::Debug for GenericDecoder {
 }
 
 /// A video decoder.
-pub struct VideoDecoder {
-    decoder: GenericDecoder,
-    hw_pix_fmt: Option<AVPixelFormat>,
-}
+/// Video decoder wrapper around GenericDecoder
+pub struct VideoDecoder(GenericDecoder);
 
 impl std::fmt::Debug for VideoDecoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -147,7 +145,7 @@ impl Decoder {
         decoder_mut.time_base = ist.time_base().into();
         decoder_mut.thread_count = options.thread_count;
 
-        let hw_pix_fmt = if let Some(hw_accel) = options.hardware_acceleration {
+        if let Some(hw_accel) = options.hardware_acceleration {
             let HardwareAccelerationOptions {
                 hw_device_type,
                 hw_pixel_format,
@@ -166,10 +164,7 @@ impl Decoder {
             .result()?;
 
             decoder_mut.hw_device_ctx = hw_device_ctx;
-            Some(hw_pixel_format)
-        } else {
-            None
-        };
+        }
 
         if AVMediaType(decoder_mut.codec_type) == AVMediaType::Video {
             // Safety: Even though we are upcasting `AVFormatContext` from a const pointer to a
@@ -190,10 +185,7 @@ impl Decoder {
         }
 
         Ok(match AVMediaType(decoder_mut.codec_type) {
-            AVMediaType::Video => Self::Video(VideoDecoder {
-                decoder: GenericDecoder { decoder },
-                hw_pix_fmt,
-            }),
+            AVMediaType::Video => Self::Video(VideoDecoder(GenericDecoder { decoder })),
             AVMediaType::Audio => Self::Audio(AudioDecoder(GenericDecoder { decoder })),
             _ => Err(FfmpegError::NoDecoder)?,
         })
@@ -294,67 +286,32 @@ impl GenericDecoder {
 impl VideoDecoder {
     /// Returns the width of the video frame.
     pub const fn width(&self) -> i32 {
-        self.decoder.decoder.as_deref_except().width
+        self.0.decoder.as_deref_except().width
     }
 
     /// Returns the height of the video frame.
     pub const fn height(&self) -> i32 {
-        self.decoder.decoder.as_deref_except().height
+        self.0.decoder.as_deref_except().height
     }
 
     /// Returns the pixel format of the video frame.
     pub const fn pixel_format(&self) -> AVPixelFormat {
-        AVPixelFormat(self.decoder.decoder.as_deref_except().pix_fmt)
+        AVPixelFormat(self.0.decoder.as_deref_except().pix_fmt)
     }
 
     /// Returns the frame rate of the video frame.
     pub fn frame_rate(&self) -> Rational {
-        self.decoder.decoder.as_deref_except().framerate.into()
+        self.0.decoder.as_deref_except().framerate.into()
     }
 
     /// Returns the sample aspect ratio of the video frame.
     pub fn sample_aspect_ratio(&self) -> Rational {
-        self.decoder.decoder.as_deref_except().sample_aspect_ratio.into()
+        self.0.decoder.as_deref_except().sample_aspect_ratio.into()
     }
 
     /// Receives a frame from the decoder.
     pub fn receive_frame(&mut self) -> Result<Option<VideoFrame>, FfmpegError> {
-        let maybe_generic_frame = self.decoder.receive_frame()?;
-        let maybe_video_frame = if let Some(frame) = maybe_generic_frame {
-            let format = AVPixelFormat::from(frame.format());
-            if let Some(hw_pix_fmt) = self.hw_pix_fmt {
-                if format == hw_pix_fmt {
-                    // Transfer data from GPU to CPU
-                    let mut sw_frame = GenericFrame::new()?;
-                    let ptr = sw_frame.as_mut_ptr();
-
-                    // Safety: `ptr` is a valid non-null pointer to AVFrame allocated by GenericFrame::new().
-                    // The pointer comes from sw_frame.as_mut_ptr() which guarantees it points to valid memory.
-                    let avframe = unsafe { ptr.as_mut() }.unwrap();
-                    // Yuv420p is needed for x264 encoding later, we can request it by setting the format on the empty frame
-                    avframe.format = AVPixelFormat::Yuv420p.into();
-
-                    // Safety: Both frame pointers are valid - `frame` comes from successful decode,
-                    // `sw_frame` was just allocated. av_hwframe_transfer_data copies frame data
-                    // from hardware memory to system memory.
-                    let ret = unsafe { av_hwframe_transfer_data(sw_frame.as_mut_ptr(), frame.as_ptr(), 0) };
-                    FfmpegErrorCode(ret).result()?;
-                    sw_frame.set_dts(frame.dts());
-                    sw_frame.set_pts(frame.pts());
-                    sw_frame.set_duration(frame.duration());
-                    sw_frame.set_time_base(frame.time_base());
-
-                    Some(sw_frame.video())
-                } else {
-                    Some(frame.video())
-                }
-            } else {
-                Some(frame.video())
-            }
-        } else {
-            None
-        };
-        Ok(maybe_video_frame)
+        Ok(self.0.receive_frame()?.map(|frame| frame.video()))
     }
 }
 
@@ -362,13 +319,13 @@ impl std::ops::Deref for VideoDecoder {
     type Target = GenericDecoder;
 
     fn deref(&self) -> &Self::Target {
-        &self.decoder
+        &self.0
     }
 }
 
 impl std::ops::DerefMut for VideoDecoder {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.decoder
+        &mut self.0
     }
 }
 
@@ -444,7 +401,7 @@ mod tests {
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let generic_decoder = match decoder {
-            Decoder::Video(video_decoder) => video_decoder.decoder,
+            Decoder::Video(video_decoder) => video_decoder.0,
             Decoder::Audio(audio_decoder) => audio_decoder.0,
         };
 

@@ -276,6 +276,55 @@ impl GenericFrame {
         self.0.as_deref_except().format
     }
 
+    /// Sets the format of the frame (pixel format for video, sample format for audio)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use scuffle_ffmpeg::{frame::GenericFrame, AVPixelFormat};
+    /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+    /// let mut frame = GenericFrame::new()?;
+    /// frame.set_format(AVPixelFormat::Yuv420p.into());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_format(&mut self, format: i32) {
+        self.0.as_deref_mut_except().format = format;
+    }
+
+    /// Sets the pixel format of the frame (convenience method for video frames)
+    ///
+    /// This is commonly used when creating frames that will be filled with data later,
+    /// as many FFmpeg functions require the format to be set beforehand.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use scuffle_ffmpeg::{frame::GenericFrame, AVPixelFormat};
+    /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+    /// let mut frame = GenericFrame::new()?;
+    /// // Set format before hardware frame transfer or other operations
+    /// frame.set_pixel_format(AVPixelFormat::Yuv420p);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_pixel_format(&mut self, format: AVPixelFormat) {
+        self.0.as_deref_mut_except().format = format.into();
+    }
+
+    /// Sets the sample format of the frame (convenience method for audio frames)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use scuffle_ffmpeg::{frame::GenericFrame, AVSampleFormat};
+    /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+    /// let mut frame = GenericFrame::new()?;
+    /// frame.set_sample_format(AVSampleFormat::Fltp);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_sample_format(&mut self, format: AVSampleFormat) {
+        self.0.as_deref_mut_except().format = format.into();
+    }
+
     /// Returns true if the frame is an audio frame.
     pub(crate) const fn is_audio(&self) -> bool {
         self.0.as_deref_except().ch_layout.nb_channels != 0
@@ -308,6 +357,107 @@ impl std::fmt::Debug for GenericFrame {
             .field("is_video", &self.is_video())
             .finish()
     }
+}
+
+/// Hardware frame mapping flags
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HwFrameMapFlags(pub i32);
+
+impl HwFrameMapFlags {
+    /// The mapping must be readable
+    pub const READ: Self = Self(1 << 0);
+    /// The mapping must be writeable
+    pub const WRITE: Self = Self(1 << 1);
+    /// The mapped frame will be overwritten completely
+    pub const OVERWRITE: Self = Self(1 << 2);
+    /// The mapping must be direct (no copying)
+    pub const DIRECT: Self = Self(1 << 3);
+}
+
+impl From<i32> for HwFrameMapFlags {
+    fn from(value: i32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<HwFrameMapFlags> for i32 {
+    fn from(flags: HwFrameMapFlags) -> Self {
+        flags.0
+    }
+}
+
+impl std::ops::BitOr for HwFrameMapFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+/// Transfers frame data from hardware memory to system memory
+///
+/// This function wraps `av_hwframe_transfer_data` to safely copy frame data
+/// from hardware-accelerated frames to system memory frames.
+///
+/// Note: This function only transfers pixel/sample data. Frame metadata such as
+/// pts, dts, duration, and time_base must be copied manually by the caller.
+///
+/// # Example
+/// ```no_run
+/// # use scuffle_ffmpeg::{transfer_hwframe_data, frame::GenericFrame, AVPixelFormat};
+/// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+/// let hw_frame = GenericFrame::new()?; // Assume this is a hardware frame
+/// let mut sw_frame = GenericFrame::new()?;
+///
+/// // Set desired output format before transfer (commonly YUV420P for encoding)
+/// sw_frame.set_pixel_format(AVPixelFormat::Yuv420p);
+///
+/// // Transfer the hardware frame data to system memory
+/// transfer_hwframe_data(&mut sw_frame, &hw_frame)?;
+///
+/// // Copy frame metadata manually if needed
+/// sw_frame.set_pts(hw_frame.pts());
+/// sw_frame.set_dts(hw_frame.dts());
+/// sw_frame.set_duration(hw_frame.duration());
+/// sw_frame.set_time_base(hw_frame.time_base());
+/// # Ok(())
+/// # }
+/// ```
+pub fn transfer_hwframe_data(dst: &mut GenericFrame, src: &GenericFrame) -> Result<(), FfmpegError> {
+    let ret = unsafe { av_hwframe_transfer_data(dst.as_mut_ptr(), src.as_ptr(), 0) };
+    FfmpegErrorCode(ret).result()?;
+    Ok(())
+}
+
+/// Maps a hardware frame to make it accessible for reading/writing
+///
+/// This function wraps `av_hwframe_map` to create a mapping between hardware
+/// and system memory frames. The mapping behavior depends on the formats and
+/// origins of the source and destination frames.
+///
+/// The destination frame should typically be blank (as created by `GenericFrame::new()`),
+/// while the source frame should be a usable hardware frame with valid buffers.
+///
+/// # Example
+/// ```no_run
+/// # use scuffle_ffmpeg::{map_hwframe, HwFrameMapFlags, frame::GenericFrame};
+/// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+/// let hw_frame = GenericFrame::new()?; // Assume this is a hardware frame
+/// let mut mapped_frame = GenericFrame::new()?;
+///
+/// // Map for read-only access
+/// map_hwframe(&mut mapped_frame, &hw_frame, HwFrameMapFlags::READ)?;
+///
+/// // Map for read-write access
+/// let rw_flags = HwFrameMapFlags::READ | HwFrameMapFlags::WRITE;
+/// map_hwframe(&mut mapped_frame, &hw_frame, rw_flags)?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn map_hwframe(dst: &mut GenericFrame, src: &GenericFrame, flags: HwFrameMapFlags) -> Result<(), FfmpegError> {
+    let ret = unsafe { av_hwframe_map(dst.as_mut_ptr(), src.as_ptr(), flags.into()) };
+    FfmpegErrorCode(ret).result()?;
+    Ok(())
 }
 
 #[bon::bon]

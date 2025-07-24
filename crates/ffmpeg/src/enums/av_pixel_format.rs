@@ -63,6 +63,106 @@ nutype_enum! {
         /// Corresponds to `AV_PIX_FMT_MonoBlack`.
         MonoBlack = AV_PIX_FMT_MONOBLACK as _,
 
+        /// 8 bits with AV_PIX_FMT_RGB32 palette
+        /// Corresponds to `AV_PIX_FMT_PAL8`.
+        Pal8 = AV_PIX_FMT_PAL8 as _,
+
+        /// Planar YUV 4:2:0, 12bpp, full scale (JPEG), deprecated
+        /// Corresponds to `AV_PIX_FMT_YUVJ420P`.
+        Yuvj420p = AV_PIX_FMT_YUVJ420P as _,
+
+        /// Planar YUV 4:2:2, 16bpp, full scale (JPEG), deprecated
+        /// Corresponds to `AV_PIX_FMT_YUVJ422P`.
+        Yuvj422p = AV_PIX_FMT_YUVJ422P as _,
+
+        /// Planar YUV 4:4:4, 24bpp, full scale (JPEG), deprecated
+        /// Corresponds to `AV_PIX_FMT_YUVJ444P`.
+        Yuvj444p = AV_PIX_FMT_YUVJ444P as _,
+
+        /// Packed YUV 4:2:2, 16bpp, Cb Y0 Cr Y1
+        /// Corresponds to `AV_PIX_FMT_UYVY422`.
+        Uyvy422 = AV_PIX_FMT_UYVY422 as _,
+
+        /// Planar YUV 4:1:0, 9bpp, (1 Cr & Cb sample per 4x4 Y samples)
+        /// Corresponds to `AV_PIX_FMT_YUV410P`.
+        Yuv410p = AV_PIX_FMT_YUV410P as _,
+
+        /// Planar YUV 4:1:1, 12bpp, (1 Cr & Cb sample per 4x1 Y samples)
+        /// Corresponds to `AV_PIX_FMT_YUV411P`.
+        Yuv411p = AV_PIX_FMT_YUV411P as _,
+
+        /// Packed YUV 4:1:1, 12bpp, Cb Y0 Y1 Cr Y2 Y3
+        /// Corresponds to `AV_PIX_FMT_UYYVYY411`.
+        Uyyvyy411 = AV_PIX_FMT_UYYVYY411 as _,
+
+        /// Packed RGB 3:3:2, 8bpp, (msb)2B 3G 3R(lsb)
+        /// Corresponds to `AV_PIX_FMT_BGR8`.
+        Bgr8 = AV_PIX_FMT_BGR8 as _,
+
+        /// Packed RGB 1:2:1 bitstream, 4bpp, (msb)1B 2G 1R(lsb)
+        /// Corresponds to `AV_PIX_FMT_BGR4`.
+        Bgr4 = AV_PIX_FMT_BGR4 as _,
+
+        /// Packed RGB 1:2:1, 8bpp, (msb)1B 2G 1R(lsb)
+        /// Corresponds to `AV_PIX_FMT_BGR4_BYTE`.
+        Bgr4Byte = AV_PIX_FMT_BGR4_BYTE as _,
+
+        /// Packed RGB 3:3:2, 8bpp, (msb)3R 3G 2B(lsb)
+        /// Corresponds to `AV_PIX_FMT_RGB8`.
+        Rgb8 = AV_PIX_FMT_RGB8 as _,
+
+        /// Packed RGB 1:2:1 bitstream, 4bpp, (msb)1R 2G 1B(lsb)
+        /// Corresponds to `AV_PIX_FMT_RGB4`.
+        Rgb4 = AV_PIX_FMT_RGB4 as _,
+
+        /// Packed RGB 1:2:1, 8bpp, (msb)1R 2G 1B(lsb)
+        /// Corresponds to `AV_PIX_FMT_RGB4_BYTE`.
+        Rgb4Byte = AV_PIX_FMT_RGB4_BYTE as _,
+
+        /// Planar YUV 4:2:0, 12bpp, 1 plane for Y and 1 plane for UV components
+        /// Corresponds to `AV_PIX_FMT_NV12`.
+        Nv12 = AV_PIX_FMT_NV12 as _,
+
+        /// As NV12, but U and V bytes are swapped
+        /// Corresponds to `AV_PIX_FMT_NV21`.
+        Nv21 = AV_PIX_FMT_NV21 as _,
+
+        /// Packed ARGB 8:8:8:8, 32bpp, ARGBARGB...
+        /// Corresponds to `AV_PIX_FMT_ARGB`.
+        Argb = AV_PIX_FMT_ARGB as _,
+
+        /// Packed RGBA 8:8:8:8, 32bpp, RGBARGBA...
+        /// Corresponds to `AV_PIX_FMT_RGBA`.
+        Rgba = AV_PIX_FMT_RGBA as _,
+
+        /// Packed ABGR 8:8:8:8, 32bpp, ABGRABGR...
+        /// Corresponds to `AV_PIX_FMT_ABGR`.
+        Abgr = AV_PIX_FMT_ABGR as _,
+
+        /// Packed BGRA 8:8:8:8, 32bpp, BGRABGRA...
+        /// Corresponds to `AV_PIX_FMT_BGRA`.
+        Bgra = AV_PIX_FMT_BGRA as _,
+
+        /// Y, 16bpp, big-endian
+        /// Corresponds to `AV_PIX_FMT_GRAY16BE`.
+        Gray16Be = AV_PIX_FMT_GRAY16BE as _,
+
+        /// Y, 16bpp, little-endian
+        /// Corresponds to `AV_PIX_FMT_GRAY16LE`.
+        Gray16Le = AV_PIX_FMT_GRAY16LE as _,
+
+        /// Planar YUV 4:4:0 (1 Cr & Cb sample per 1x2 Y samples)
+        /// Corresponds to `AV_PIX_FMT_YUV440P`.
+        Yuv440p = AV_PIX_FMT_YUV440P as _,
+
+        /// Planar YUV 4:4:0 full scale (JPEG), deprecated
+        /// Corresponds to `AV_PIX_FMT_YUVJ440P`.
+        Yuvj440p = AV_PIX_FMT_YUVJ440P as _,
+
+        /// Planar YUV 4:2:0, 20bpp, (1 Cr & Cb sample per 2x2 Y & A samples)
+        /// Corresponds to `AV_PIX_FMT_YUVA420P`.
+        Yuva420p = AV_PIX_FMT_YUVA420P as _,
+
         /// Packed RGB 5:6:5 format, 16 bits per pixel.
         /// Corresponds to: `AV_PIX_FMT_RGB565BE`
         Rgb565Be = AV_PIX_FMT_RGB565BE as _,
@@ -150,6 +250,118 @@ nutype_enum! {
         /// Planar GBR format, 4:4:4 subsampling.
         /// Corresponds to `AV_PIX_FMT_GBRP`.
         Gbrp = AV_PIX_FMT_GBRP as _,
+
+        /// HW decoding through DXVA2
+        /// Corresponds to `AV_PIX_FMT_DXVA2_VLD`.
+        Dxva2Vld = AV_PIX_FMT_DXVA2_VLD as _,
+
+        /// Packed RGB 4:4:4, 16bpp, little-endian
+        /// Corresponds to `AV_PIX_FMT_RGB444LE`.
+        Rgb444Le = AV_PIX_FMT_RGB444LE as _,
+
+        /// Packed RGB 4:4:4, 16bpp, big-endian
+        /// Corresponds to `AV_PIX_FMT_RGB444BE`.
+        Rgb444Be = AV_PIX_FMT_RGB444BE as _,
+
+        /// Packed BGR 4:4:4, 16bpp, little-endian
+        /// Corresponds to `AV_PIX_FMT_BGR444LE`.
+        Bgr444Le = AV_PIX_FMT_BGR444LE as _,
+
+        /// Packed BGR 4:4:4, 16bpp, big-endian
+        /// Corresponds to `AV_PIX_FMT_BGR444BE`.
+        Bgr444Be = AV_PIX_FMT_BGR444BE as _,
+
+        /// 8 bits gray, 8 bits alpha
+        /// Corresponds to `AV_PIX_FMT_YA8`.
+        Ya8 = AV_PIX_FMT_YA8 as _,
+
+        /// Packed RGB 16:16:16, 48bpp, 16B, 16G, 16R, big-endian
+        /// Corresponds to `AV_PIX_FMT_BGR48BE`.
+        Bgr48Be = AV_PIX_FMT_BGR48BE as _,
+
+        /// Packed RGB 16:16:16, 48bpp, 16B, 16G, 16R, little-endian
+        /// Corresponds to `AV_PIX_FMT_BGR48LE`.
+        Bgr48Le = AV_PIX_FMT_BGR48LE as _,
+
+        /// HW acceleration through VDPAU
+        /// Corresponds to `AV_PIX_FMT_VDPAU`.
+        Vdpau = AV_PIX_FMT_VDPAU as _,
+
+        /// Packed YUV 4:2:2, 16bpp, Y0 Cr Y1 Cb
+        /// Corresponds to `AV_PIX_FMT_YVYU422`.
+        Yvyu422 = AV_PIX_FMT_YVYU422 as _,
+
+        /// 16 bits gray, 16 bits alpha (big-endian)
+        /// Corresponds to `AV_PIX_FMT_YA16BE`.
+        Ya16Be = AV_PIX_FMT_YA16BE as _,
+
+        /// 16 bits gray, 16 bits alpha (little-endian)
+        /// Corresponds to `AV_PIX_FMT_YA16LE`.
+        Ya16Le = AV_PIX_FMT_YA16LE as _,
+
+        /// Planar GBRA 4:4:4:4 32bpp
+        /// Corresponds to `AV_PIX_FMT_GBRAP`.
+        Gbrap = AV_PIX_FMT_GBRAP as _,
+
+        /// Planar GBRA 4:4:4:4 64bpp, big-endian
+        /// Corresponds to `AV_PIX_FMT_GBRAP16BE`.
+        Gbrap16Be = AV_PIX_FMT_GBRAP16BE as _,
+
+        /// Planar GBRA 4:4:4:4 64bpp, little-endian
+        /// Corresponds to `AV_PIX_FMT_GBRAP16LE`.
+        Gbrap16Le = AV_PIX_FMT_GBRAP16LE as _,
+
+        /// HW acceleration through QSV
+        /// Corresponds to `AV_PIX_FMT_QSV`.
+        Qsv = AV_PIX_FMT_QSV as _,
+
+        /// HW acceleration through Direct3D11
+        /// Corresponds to `AV_PIX_FMT_D3D11VA_VLD`.
+        D3d11vaVld = AV_PIX_FMT_D3D11VA_VLD as _,
+
+        /// HW acceleration through CUDA
+        /// Corresponds to `AV_PIX_FMT_CUDA`.
+        Cuda = AV_PIX_FMT_CUDA as _,
+
+        /// Packed RGB 8:8:8, 32bpp, XRGBXRGB... X=unused
+        /// Corresponds to `AV_PIX_FMT_0RGB`.
+        ZeroRgb = AV_PIX_FMT_0RGB as _,
+
+        /// Packed RGB 8:8:8, 32bpp, RGBXRGBX... X=unused
+        /// Corresponds to `AV_PIX_FMT_RGB0`.
+        Rgb0 = AV_PIX_FMT_RGB0 as _,
+
+        /// Packed BGR 8:8:8, 32bpp, XBGRXBGR... X=unused
+        /// Corresponds to `AV_PIX_FMT_0BGR`.
+        ZeroBgr = AV_PIX_FMT_0BGR as _,
+
+        /// Packed BGR 8:8:8, 32bpp, BGRXBGRX... X=unused
+        /// Corresponds to `AV_PIX_FMT_BGR0`.
+        Bgr0 = AV_PIX_FMT_BGR0 as _,
+
+        /// Planar YUV 4:2:2 24bpp, (1 Cr & Cb sample per 2x1 Y & A samples)
+        /// Corresponds to `AV_PIX_FMT_YUVA422P`.
+        Yuva422p = AV_PIX_FMT_YUVA422P as _,
+
+        /// Planar YUV 4:4:4 32bpp, (1 Cr & Cb sample per 1x1 Y & A samples)
+        /// Corresponds to `AV_PIX_FMT_YUVA444P`.
+        Yuva444p = AV_PIX_FMT_YUVA444P as _,
+
+        /// Interleaved chroma YUV 4:2:2, 16bpp
+        /// Corresponds to `AV_PIX_FMT_NV16`.
+        Nv16 = AV_PIX_FMT_NV16 as _,
+
+        /// Like NV12, with 10bpp per component, little-endian
+        /// Corresponds to `AV_PIX_FMT_P010LE`.
+        P010Le = AV_PIX_FMT_P010LE as _,
+
+        /// Like NV12, with 10bpp per component, big-endian
+        /// Corresponds to `AV_PIX_FMT_P010BE`.
+        P010Be = AV_PIX_FMT_P010BE as _,
+
+        /// Hardware decoding through Videotoolbox
+        /// Corresponds to `AV_PIX_FMT_VIDEOTOOLBOX`.
+        Videotoolbox = AV_PIX_FMT_VIDEOTOOLBOX as _,
 
         /// Format count, not an actual pixel format.
         /// Used internally by FFmpeg.
