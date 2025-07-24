@@ -276,6 +276,55 @@ impl GenericFrame {
         self.0.as_deref_except().format
     }
 
+    /// Sets the format of the frame (pixel format for video, sample format for audio)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use scuffle_ffmpeg::{frame::GenericFrame, AVPixelFormat};
+    /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+    /// let mut frame = GenericFrame::new()?;
+    /// frame.set_format(AVPixelFormat::Yuv420p.into());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_format(&mut self, format: i32) {
+        self.0.as_deref_mut_except().format = format;
+    }
+
+    /// Sets the pixel format of the frame (convenience method for video frames)
+    ///
+    /// This is commonly used when creating frames that will be filled with data later,
+    /// as many FFmpeg functions require the format to be set beforehand.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use scuffle_ffmpeg::{frame::GenericFrame, AVPixelFormat};
+    /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+    /// let mut frame = GenericFrame::new()?;
+    /// // Set format before hardware frame transfer or other operations
+    /// frame.set_pixel_format(AVPixelFormat::Yuv420p);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_pixel_format(&mut self, format: AVPixelFormat) {
+        self.0.as_deref_mut_except().format = format.into();
+    }
+
+    /// Sets the sample format of the frame (convenience method for audio frames)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use scuffle_ffmpeg::{frame::GenericFrame, AVSampleFormat};
+    /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+    /// let mut frame = GenericFrame::new()?;
+    /// frame.set_sample_format(AVSampleFormat::Fltp);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_sample_format(&mut self, format: AVSampleFormat) {
+        self.0.as_deref_mut_except().format = format.into();
+    }
+
     /// Returns true if the frame is an audio frame.
     pub(crate) const fn is_audio(&self) -> bool {
         self.0.as_deref_except().ch_layout.nb_channels != 0
@@ -355,12 +404,22 @@ impl std::ops::BitOr for HwFrameMapFlags {
 ///
 /// # Example
 /// ```no_run
-/// # use scuffle_ffmpeg::{transfer_hwframe_data, frame::GenericFrame};
+/// # use scuffle_ffmpeg::{transfer_hwframe_data, frame::GenericFrame, AVPixelFormat};
 /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
 /// let hw_frame = GenericFrame::new()?; // Assume this is a hardware frame
 /// let mut sw_frame = GenericFrame::new()?;
 ///
+/// // Set desired output format before transfer (commonly YUV420P for encoding)
+/// sw_frame.set_pixel_format(AVPixelFormat::Yuv420p);
+///
+/// // Transfer the hardware frame data to system memory
 /// transfer_hwframe_data(&mut sw_frame, &hw_frame)?;
+///
+/// // Copy frame metadata manually if needed
+/// sw_frame.set_pts(hw_frame.pts());
+/// sw_frame.set_dts(hw_frame.dts());
+/// sw_frame.set_duration(hw_frame.duration());
+/// sw_frame.set_time_base(hw_frame.time_base());
 /// # Ok(())
 /// # }
 /// ```
