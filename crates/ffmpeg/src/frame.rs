@@ -166,7 +166,7 @@ pub struct AudioFrame(GenericFrame);
 
 impl GenericFrame {
     /// Creates a new frame.
-    pub(crate) fn new() -> Result<Self, FfmpegError> {
+    pub fn new() -> Result<Self, FfmpegError> {
         // Safety: `av_frame_alloc` is safe to call.
         let frame = unsafe { av_frame_alloc() };
 
