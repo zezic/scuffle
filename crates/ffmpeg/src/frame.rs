@@ -310,6 +310,97 @@ impl std::fmt::Debug for GenericFrame {
     }
 }
 
+/// Hardware frame mapping flags
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HwFrameMapFlags(pub i32);
+
+impl HwFrameMapFlags {
+    /// The mapping must be readable
+    pub const READ: Self = Self(1 << 0);
+    /// The mapping must be writeable
+    pub const WRITE: Self = Self(1 << 1);
+    /// The mapped frame will be overwritten completely
+    pub const OVERWRITE: Self = Self(1 << 2);
+    /// The mapping must be direct (no copying)
+    pub const DIRECT: Self = Self(1 << 3);
+}
+
+impl From<i32> for HwFrameMapFlags {
+    fn from(value: i32) -> Self {
+        Self(value)
+    }
+}
+
+impl From<HwFrameMapFlags> for i32 {
+    fn from(flags: HwFrameMapFlags) -> Self {
+        flags.0
+    }
+}
+
+impl std::ops::BitOr for HwFrameMapFlags {
+    type Output = Self;
+
+    fn bitor(self, rhs: Self) -> Self::Output {
+        Self(self.0 | rhs.0)
+    }
+}
+
+/// Transfers frame data from hardware memory to system memory
+///
+/// This function wraps `av_hwframe_transfer_data` to safely copy frame data
+/// from hardware-accelerated frames to system memory frames.
+///
+/// Note: This function only transfers pixel/sample data. Frame metadata such as
+/// pts, dts, duration, and time_base must be copied manually by the caller.
+///
+/// # Example
+/// ```no_run
+/// # use scuffle_ffmpeg::{transfer_hwframe_data, frame::GenericFrame};
+/// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+/// let hw_frame = GenericFrame::new()?; // Assume this is a hardware frame
+/// let mut sw_frame = GenericFrame::new()?;
+///
+/// transfer_hwframe_data(&mut sw_frame, &hw_frame)?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn transfer_hwframe_data(dst: &mut GenericFrame, src: &GenericFrame) -> Result<(), FfmpegError> {
+    let ret = unsafe { av_hwframe_transfer_data(dst.as_mut_ptr(), src.as_ptr(), 0) };
+    FfmpegErrorCode(ret).result()?;
+    Ok(())
+}
+
+/// Maps a hardware frame to make it accessible for reading/writing
+///
+/// This function wraps `av_hwframe_map` to create a mapping between hardware
+/// and system memory frames. The mapping behavior depends on the formats and
+/// origins of the source and destination frames.
+///
+/// The destination frame should typically be blank (as created by `GenericFrame::new()`),
+/// while the source frame should be a usable hardware frame with valid buffers.
+///
+/// # Example
+/// ```no_run
+/// # use scuffle_ffmpeg::{map_hwframe, HwFrameMapFlags, frame::GenericFrame};
+/// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+/// let hw_frame = GenericFrame::new()?; // Assume this is a hardware frame
+/// let mut mapped_frame = GenericFrame::new()?;
+///
+/// // Map for read-only access
+/// map_hwframe(&mut mapped_frame, &hw_frame, HwFrameMapFlags::READ)?;
+///
+/// // Map for read-write access
+/// let rw_flags = HwFrameMapFlags::READ | HwFrameMapFlags::WRITE;
+/// map_hwframe(&mut mapped_frame, &hw_frame, rw_flags)?;
+/// # Ok(())
+/// # }
+/// ```
+pub fn map_hwframe(dst: &mut GenericFrame, src: &GenericFrame, flags: HwFrameMapFlags) -> Result<(), FfmpegError> {
+    let ret = unsafe { av_hwframe_map(dst.as_mut_ptr(), src.as_ptr(), flags.into()) };
+    FfmpegErrorCode(ret).result()?;
+    Ok(())
+}
+
 #[bon::bon]
 impl VideoFrame {
     /// Creates a new [`VideoFrame`]

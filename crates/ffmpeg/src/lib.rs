@@ -275,6 +275,9 @@ pub mod utils;
 
 pub use rusty_ffmpeg::ffi;
 
+// Re-export hardware frame operations
+pub use frame::{HwFrameMapFlags, map_hwframe, transfer_hwframe_data};
+
 mod smart_object;
 
 mod enums;

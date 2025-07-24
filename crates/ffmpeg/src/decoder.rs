@@ -55,22 +55,6 @@ impl std::fmt::Debug for VideoDecoder {
     }
 }
 
-/// Transfers frame data from hardware memory to system memory
-///
-/// This function wraps `av_hwframe_transfer_data` to safely copy frame data
-/// from hardware-accelerated frames to system memory frames.
-///
-/// Note: This function only transfers pixel/sample data. Frame metadata such as
-/// pts, dts, duration, and time_base must be copied manually by the caller.
-///
-/// # Safety
-/// Both `dst` and `src` must be valid AVFrame pointers
-pub fn transfer_hwframe_data(dst: &mut GenericFrame, src: &GenericFrame) -> Result<(), FfmpegError> {
-    let ret = unsafe { av_hwframe_transfer_data(dst.as_mut_ptr(), src.as_ptr(), 0) };
-    FfmpegErrorCode(ret).result()?;
-    Ok(())
-}
-
 /// An audio decoder.
 pub struct AudioDecoder(GenericDecoder);
 
