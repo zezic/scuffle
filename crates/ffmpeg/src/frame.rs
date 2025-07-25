@@ -257,7 +257,7 @@ impl GenericFrame {
     }
 
     /// Sets the decoding timestamp of the frame, in `time_base` units.
-    pub(crate) const fn set_dts(&mut self, dts: Option<i64>) {
+    pub const fn set_dts(&mut self, dts: Option<i64>) {
         self.0.as_deref_mut_except().pkt_dts = or_nopts(dts);
     }
 
@@ -272,7 +272,7 @@ impl GenericFrame {
     }
 
     /// Returns the format of the frame.
-    pub(crate) const fn format(&self) -> i32 {
+    pub const fn format(&self) -> i32 {
         self.0.as_deref_except().format
     }
 
