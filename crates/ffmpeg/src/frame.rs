@@ -325,6 +325,36 @@ impl GenericFrame {
         self.0.as_deref_mut_except().format = format.into();
     }
 
+    /// Returns a reference to the hardware frames context buffer reference.
+    ///
+    /// This function provides access to the hardware frames context associated with the frame,
+    /// which contains information about hardware acceleration parameters, memory pools, and
+    /// device contexts used for hardware-accelerated processing.
+    ///
+    /// # Returns
+    /// - `Some(&AVBufferRef)` if the frame has an associated hardware frames context
+    /// - `None` if the frame is not hardware-accelerated or has no context
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use scuffle_ffmpeg::frame::GenericFrame;
+    /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+    /// let frame = GenericFrame::new()?;
+    ///
+    /// if let Some(hw_ctx) = frame.hwframe_ctx() {
+    ///     // Frame has hardware acceleration context
+    ///     println!("Frame has hardware context");
+    /// } else {
+    ///     // Frame is software-only
+    ///     println!("Frame is software-only");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn hwframe_ctx(&self) -> Option<&AVBufferRef> {
+        unsafe { self.0.as_deref_except().hw_frames_ctx.as_ref() }
+    }
+
     /// Returns true if the frame is an audio frame.
     pub(crate) const fn is_audio(&self) -> bool {
         self.0.as_deref_except().ch_layout.nb_channels != 0
