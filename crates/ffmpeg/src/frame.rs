@@ -325,15 +325,19 @@ impl GenericFrame {
         self.0.as_deref_mut_except().format = format.into();
     }
 
-    /// Returns a reference to the hardware frames context buffer reference.
+    /// Returns a raw pointer to the hardware frames context buffer reference.
     ///
     /// This function provides access to the hardware frames context associated with the frame,
     /// which contains information about hardware acceleration parameters, memory pools, and
     /// device contexts used for hardware-accelerated processing.
     ///
     /// # Returns
-    /// - `Some(&AVBufferRef)` if the frame has an associated hardware frames context
-    /// - `None` if the frame is not hardware-accelerated or has no context
+    /// A raw pointer to `AVBufferRef` if the frame has an associated hardware frames context,
+    /// or a null pointer if the frame is not hardware-accelerated or has no context.
+    ///
+    /// # Safety
+    /// The caller must ensure that the returned pointer is used safely and that the
+    /// frame remains valid for the lifetime of any operations on the pointer.
     ///
     /// # Example
     /// ```no_run
@@ -341,7 +345,8 @@ impl GenericFrame {
     /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
     /// let frame = GenericFrame::new()?;
     ///
-    /// if let Some(hw_ctx) = frame.hwframe_ctx() {
+    /// let hw_ctx = frame.hwframe_ctx();
+    /// if !hw_ctx.is_null() {
     ///     // Frame has hardware acceleration context
     ///     println!("Frame has hardware context");
     /// } else {
@@ -351,8 +356,8 @@ impl GenericFrame {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn hwframe_ctx(&self) -> Option<&AVBufferRef> {
-        unsafe { self.0.as_deref_except().hw_frames_ctx.as_ref() }
+    pub fn hwframe_ctx(&self) -> *mut AVBufferRef {
+        self.0.as_deref_except().hw_frames_ctx
     }
 
     /// Returns true if the frame is an audio frame.
