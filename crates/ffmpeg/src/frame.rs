@@ -377,6 +377,56 @@ impl GenericFrame {
         }
         Some(self.0.as_deref_except().linesize[index])
     }
+
+    /// Returns a const pointer to the frame for use with functions that need immutable access.
+    pub const fn as_const_ptr(&self) -> *const AVFrame {
+        self.0.as_ptr()
+    }
+
+    /// Copy properties from another frame to this frame.
+    ///
+    /// This function copies only "metadata" fields from the source frame to this frame.
+    /// It does not copy the actual frame data (pixel or audio data) or structural
+    /// fields like format, width, height, or channel layout.
+    ///
+    /// The properties copied include:
+    /// - Picture type, sample aspect ratio, crop information
+    /// - Timestamps (PTS, DTS, duration, best effort timestamp)
+    /// - Sample rate, time base, quality, repeat picture count
+    /// - Color information (primaries, transfer characteristics, colorspace, range, chroma location)
+    /// - Frame flags and decode error flags
+    /// - Side data (captions, HDR metadata, etc.)
+    /// - Metadata dictionary
+    /// - Opaque pointers and references
+    ///
+    /// Note: This function does NOT copy format, width, height, nb_samples, or channel layout.
+    ///
+    /// # Arguments
+    /// * `src` - The source frame to copy properties from
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(FfmpegError)` if the operation fails (e.g., memory allocation error)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use scuffle_ffmpeg::frame::GenericFrame;
+    /// # fn example() -> Result<(), scuffle_ffmpeg::error::FfmpegError> {
+    /// let mut dest_frame = GenericFrame::new()?;
+    /// let src_frame = GenericFrame::new()?;
+    ///
+    /// // Copy all properties from src_frame to dest_frame
+    /// dest_frame.copy_props_from(&src_frame)?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn copy_props_from(&mut self, src: &GenericFrame) -> Result<(), FfmpegError> {
+        // Safety: Both self.as_mut_ptr() and src.as_const_ptr() provide valid pointers to
+        // AVFrame structures. The av_frame_copy_props function is safe to call with valid
+        // AVFrame pointers and will copy metadata fields from src to dst.
+        FfmpegErrorCode(unsafe { av_frame_copy_props(self.as_mut_ptr(), src.as_const_ptr()) }).result()?;
+        Ok(())
+    }
 }
 
 impl std::fmt::Debug for GenericFrame {
@@ -1356,5 +1406,154 @@ mod tests {
         for i in 0..frame_data.len() {
             assert_eq!(frame_data[i], 1, "all bytes of frame_data should be 0")
         }
+    }
+
+    #[test]
+    fn test_copy_props_from() {
+        // Create source frame with various properties set
+        let mut src_frame = GenericFrame::new().expect("Failed to create source frame");
+        src_frame.set_pts(Some(12345));
+        src_frame.set_dts(Some(67890));
+        src_frame.set_duration(Some(1000));
+        src_frame.set_time_base(Rational::static_new::<1, 30>());
+        src_frame.set_pixel_format(AVPixelFormat::Yuv420p);
+
+        // Create destination frame with different properties
+        let mut dest_frame = GenericFrame::new().expect("Failed to create destination frame");
+        dest_frame.set_pts(Some(99999));
+        dest_frame.set_dts(Some(88888));
+        dest_frame.set_duration(Some(2000));
+        dest_frame.set_time_base(Rational::static_new::<1, 60>());
+        dest_frame.set_pixel_format(AVPixelFormat::Rgb24);
+
+        // Store original format to verify it's NOT copied
+        let original_dest_format = dest_frame.format();
+
+        // Verify initial differences
+        assert_ne!(dest_frame.pts(), src_frame.pts());
+        assert_ne!(dest_frame.dts(), src_frame.dts());
+        assert_ne!(dest_frame.duration(), src_frame.duration());
+        assert_ne!(dest_frame.time_base(), src_frame.time_base());
+
+        // Copy properties from source to destination
+        dest_frame.copy_props_from(&src_frame).expect("Failed to copy props");
+
+        // Verify properties were copied (note: format is NOT copied by av_frame_copy_props)
+        assert_eq!(dest_frame.pts(), src_frame.pts());
+        assert_eq!(dest_frame.dts(), src_frame.dts());
+        assert_eq!(dest_frame.duration(), src_frame.duration());
+        assert_eq!(dest_frame.time_base(), src_frame.time_base());
+
+        // Verify format was NOT changed (av_frame_copy_props doesn't copy format)
+        assert_eq!(dest_frame.format(), original_dest_format);
+        assert_ne!(dest_frame.format(), src_frame.format());
+    }
+
+    #[test]
+    fn test_copy_props_from_video_frames() {
+        // Create source video frame with comprehensive properties
+        let mut src_frame = VideoFrame::builder()
+            .width(1920)
+            .height(1080)
+            .pts(100)
+            .dts(90)
+            .duration(33)
+            .time_base(Rational::static_new::<1, 30>())
+            .pix_fmt(AVPixelFormat::Yuv420p)
+            .build()
+            .expect("Failed to create source video frame");
+
+        src_frame.set_pict_type(AVPictureType::Intra);
+        src_frame.set_sample_aspect_ratio(Rational::static_new::<16, 9>());
+
+        // Create destination video frame with different properties
+        let mut dest_frame = VideoFrame::builder()
+            .width(1280) // Different width
+            .height(720) // Different height
+            .pts(200)
+            .dts(190)
+            .duration(40)
+            .time_base(Rational::static_new::<1, 60>())
+            .pix_fmt(AVPixelFormat::Rgb24) // Different format
+            .build()
+            .expect("Failed to create destination video frame");
+
+        dest_frame.set_pict_type(AVPictureType::Predicted);
+        dest_frame.set_sample_aspect_ratio(Rational::static_new::<4, 3>());
+
+        // Store original structural properties that should NOT change
+        let original_width = dest_frame.width();
+        let original_height = dest_frame.height();
+        let original_format = dest_frame.format();
+
+        // Copy properties
+        dest_frame.copy_props_from(&src_frame).expect("Failed to copy props");
+
+        // Verify metadata properties were copied
+        assert_eq!(dest_frame.pts(), src_frame.pts());
+        assert_eq!(dest_frame.dts(), src_frame.dts());
+        assert_eq!(dest_frame.duration(), src_frame.duration());
+        assert_eq!(dest_frame.time_base(), src_frame.time_base());
+        assert_eq!(dest_frame.pict_type(), src_frame.pict_type());
+        assert_eq!(dest_frame.sample_aspect_ratio(), src_frame.sample_aspect_ratio());
+
+        // Verify structural properties were NOT copied
+        assert_eq!(dest_frame.width(), original_width);
+        assert_eq!(dest_frame.height(), original_height);
+        assert_eq!(dest_frame.format(), original_format);
+        assert_ne!(dest_frame.width(), src_frame.width());
+        assert_ne!(dest_frame.height(), src_frame.height());
+        assert_ne!(dest_frame.format(), src_frame.format());
+    }
+
+    #[test]
+    fn test_copy_props_from_audio_frames() {
+        // Create source audio frame
+        let src_frame = AudioFrame::builder()
+            .nb_samples(1024)
+            .sample_rate(48000)
+            .channel_layout(AudioChannelLayout::new(2).expect("Failed to create channel layout"))
+            .sample_fmt(AVSampleFormat::Fltp)
+            .pts(500)
+            .dts(490)
+            .duration(21)
+            .time_base(Rational::static_new::<1, 48000>())
+            .build()
+            .expect("Failed to create source audio frame");
+
+        // Create destination audio frame with different properties
+        let mut dest_frame = AudioFrame::builder()
+            .nb_samples(512) // Different sample count
+            .sample_rate(44100) // Different sample rate
+            .channel_layout(AudioChannelLayout::new(6).expect("Failed to create channel layout")) // Different channels
+            .sample_fmt(AVSampleFormat::S16) // Different format
+            .pts(600)
+            .dts(590)
+            .duration(25)
+            .time_base(Rational::static_new::<1, 44100>())
+            .build()
+            .expect("Failed to create destination audio frame");
+
+        // Store original structural properties that should NOT change
+        let original_nb_samples = dest_frame.nb_samples();
+        let original_channel_count = dest_frame.channel_count();
+        let original_format = dest_frame.format();
+
+        // Copy properties
+        dest_frame.copy_props_from(&src_frame).expect("Failed to copy props");
+
+        // Verify metadata properties were copied
+        assert_eq!(dest_frame.pts(), src_frame.pts());
+        assert_eq!(dest_frame.dts(), src_frame.dts());
+        assert_eq!(dest_frame.duration(), src_frame.duration());
+        assert_eq!(dest_frame.time_base(), src_frame.time_base());
+
+        // Verify structural properties were NOT copied
+        assert_eq!(dest_frame.nb_samples(), original_nb_samples);
+        assert_eq!(dest_frame.channel_count(), original_channel_count);
+        assert_eq!(dest_frame.format(), original_format);
+        assert_ne!(dest_frame.nb_samples(), src_frame.nb_samples());
+        assert_ne!(dest_frame.channel_count(), src_frame.channel_count());
+        assert_ne!(dest_frame.format(), src_frame.format());
     }
 }
