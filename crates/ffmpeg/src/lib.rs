@@ -227,6 +227,53 @@
 //! # test_fn().expect("failed to run test");
 //! ```
 //!
+//! ### Scaling video frames
+//!
+//! ```rust
+//! # use std::path::PathBuf;
+//! # use scuffle_ffmpeg::{AVMediaType, AVPixelFormat};
+//! # use scuffle_ffmpeg::scaler::{VideoScaler, ScalingAlgorithm};
+//! # fn test_fn() -> Result<(), Box<dyn std::error::Error>> {
+//! # let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets").join("avc_aac.mp4");
+//! // 1. Create an input and get the video stream
+//! let mut input = scuffle_ffmpeg::io::Input::seekable(std::fs::File::open(path)?)?;
+//! let streams = input.streams();
+//! let best_video_stream = streams.best(AVMediaType::Video).expect("no video stream found");
+//!
+//! // 2. Create a decoder for the video stream
+//! let mut video_decoder = scuffle_ffmpeg::decoder::Decoder::new(&best_video_stream)?
+//!     .video()
+//!     .expect("not a video decoder");
+//!
+//! // 3. Create a scaler to resize the video to 640x480 using Lanczos algorithm
+//! let mut scaler = VideoScaler::with_algorithm(
+//!     video_decoder.width(),
+//!     video_decoder.height(),
+//!     video_decoder.pixel_format(),
+//!     640,
+//!     480,
+//!     AVPixelFormat::Rgb24,
+//!     ScalingAlgorithm::Lanczos
+//! )?;
+//!
+//! // 4. Process frames through the decoder and scaler
+//! for packet in input.packets() {
+//!     let packet = packet?;
+//!     if packet.stream_index() == best_video_stream.index() {
+//!         video_decoder.send_packet(&packet)?;
+//!         while let Some(frame) = video_decoder.receive_frame()? {
+//!             // Scale the frame
+//!             let scaled_frame = scaler.process(&frame)?;
+//!             // Do something with the scaled frame
+//!             dbg!(scaled_frame.width(), scaled_frame.height());
+//!         }
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! # test_fn().expect("failed to run test");
+//! ```
+//!
 //! ## License
 //!
 //! This project is licensed under the MIT or Apache-2.0 license.
