@@ -151,6 +151,15 @@ nutype_enum! {
         /// Corresponds to `AV_PIX_FMT_GBRP`.
         Gbrp = AV_PIX_FMT_GBRP as _,
 
+        /// Semi-planar YUV 4:2:0 format, 12 bits per pixel.
+        /// Y plane followed by interleaved U and V planes.
+        /// Corresponds to `AV_PIX_FMT_NV12`.
+        Nv12 = AV_PIX_FMT_NV12 as _,
+
+        /// Hardware-accelerated format through CUDA.
+        /// Corresponds to `AV_PIX_FMT_CUDA`.
+        Cuda = AV_PIX_FMT_CUDA as _,
+
         /// Format count, not an actual pixel format.
         /// Used internally by FFmpeg.
         /// Corresponds to `AV_PIX_FMT_NB`.

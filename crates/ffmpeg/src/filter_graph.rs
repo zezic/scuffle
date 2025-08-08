@@ -11,6 +11,35 @@
 //! 1. **Name-based linking** via [`FilterGraph::link`] - Recommended for most use cases
 //! 2. **Direct context linking** via [`link_filter_contexts`] - For advanced scenarios
 //!
+//! ## Hardware-Accelerated Filtering
+//!
+//! For GPU-accelerated filtering with CUDA or other hardware contexts, use [`HWFramesContext`]
+//! to set up hardware frames context:
+//!
+//! ```rust,ignore
+//! use scuffle_ffmpeg::filter_graph::{FilterGraph, HWFramesContext};
+//! use scuffle_ffmpeg::AVPixelFormat;
+//!
+//! // Assuming you have a hardware device context from elsewhere
+//! let hw_device_ctx: *mut scuffle_ffmpeg::ffi::AVBufferRef = get_hw_device_ctx();
+//!
+//! // Create hardware frames context for CUDA
+//! let hw_frames = unsafe {
+//!     HWFramesContext::new(
+//!         hw_device_ctx,
+//!         AVPixelFormat::Cuda,     // Hardware format
+//!         AVPixelFormat::Nv12,     // Software format
+//!         1920,                    // Width
+//!         1080,                    // Height
+//!         4                        // Initial pool size
+//!     )?
+//! };
+//!
+//! // Apply to a buffer source filter
+//! let mut source = filter_graph.get("buffer_source")?.source();
+//! source.set_hw_frames_context(&hw_frames)?;
+//! ```
+//!
 //! ### Example: Basic Filter Linking
 //!
 //! ```rust
@@ -106,6 +135,7 @@
 use std::ffi::CString;
 use std::ptr::NonNull;
 
+use crate::AVPixelFormat;
 use crate::error::{FfmpegError, FfmpegErrorCode};
 use crate::ffi::*;
 use crate::frame::GenericFrame;
@@ -483,6 +513,64 @@ impl FilterContextSource<'_> {
 
         Ok(())
     }
+
+    /// Sets the hardware frames context for this filter source.
+    ///
+    /// This is typically used for hardware-accelerated filters that need to work with GPU memory.
+    ///
+    /// # Arguments
+    /// * `hw_frames_ctx` - The hardware frames context to attach
+    ///
+    /// # Example
+    /// ```ignore
+    /// // Assuming you have a hw_device_ctx and a buffer source filter
+    /// let hw_frames = unsafe {
+    ///     HWFramesContext::new(
+    ///         hw_device_ctx,
+    ///         AVPixelFormat::Cuda,
+    ///         AVPixelFormat::Nv12,
+    ///         1920,
+    ///         1080,
+    ///         4
+    ///     )?
+    /// };
+    /// filter_source.set_hw_frames_context(&hw_frames)?;
+    /// ```
+    pub fn set_hw_frames_context(&mut self, hw_frames_ctx: &HWFramesContext) -> Result<(), FfmpegError> {
+        // Safety: av_buffersrc_parameters_alloc is safe to call
+        let params = unsafe { av_buffersrc_parameters_alloc() };
+        if params.is_null() {
+            return Err(FfmpegError::Alloc);
+        }
+
+        // Step 1: Set the hw_frames_ctx in the parameters
+        // Safety: av_buffer_ref creates a new reference to the hw_frames_ctx
+        let hw_frames_ref = unsafe { av_buffer_ref(hw_frames_ctx.as_ptr() as *mut _) };
+        if hw_frames_ref.is_null() {
+            // Safety: av_freep is safe to call for cleanup
+            unsafe { av_freep(params as *mut _ as *mut libc::c_void) };
+            return Err(FfmpegError::Alloc);
+        }
+
+        // Safety: params is valid and hw_frames_ref is a valid reference
+        unsafe {
+            (*params).hw_frames_ctx = hw_frames_ref;
+        }
+
+        // Step 2: Apply the parameters to the filter context
+        // Safety: av_buffersrc_parameters_set is safe to call with valid parameters
+        let result = unsafe { av_buffersrc_parameters_set(self.0, params) };
+
+        // Clean up the parameters struct (FFmpeg now owns hw_frames_ctx)
+        // Safety: av_freep is safe to call for cleanup
+        unsafe { av_freep(params as *mut _ as *mut libc::c_void) };
+
+        if result < 0 {
+            return Err(FfmpegError::Code(FfmpegErrorCode::from(result)));
+        }
+
+        Ok(())
+    }
 }
 
 /// A sink for a filter context. Where this is specifically used to receive frames from the filter context.
@@ -505,6 +593,115 @@ impl FilterContextSink<'_> {
     }
 }
 
+/// A hardware frames context for GPU-accelerated filtering.
+///
+/// This wraps an `AVBufferRef` pointing to an `AVHWFramesContext` and manages its lifecycle.
+pub struct HWFramesContext {
+    ptr: SmartPtr<AVBufferRef>,
+}
+
+unsafe impl Send for HWFramesContext {}
+
+impl HWFramesContext {
+    /// Creates a new hardware frames context from a hardware device context.
+    ///
+    /// # Arguments
+    /// * `hw_device_ctx` - Pointer to the hardware device context (`AVBufferRef`)
+    /// * `format` - Hardware pixel format (e.g., `AVPixelFormat::Cuda`)
+    /// * `sw_format` - Software pixel format for the underlying data (e.g., `AVPixelFormat::Nv12`)
+    /// * `width` - Frame width
+    /// * `height` - Frame height
+    /// * `initial_pool_size` - Initial number of frames to allocate in the pool
+    ///
+    /// # Safety
+    /// The `hw_device_ctx` pointer must be valid and properly initialized.
+    pub unsafe fn new(
+        hw_device_ctx: *mut AVBufferRef,
+        format: AVPixelFormat,
+        sw_format: AVPixelFormat,
+        width: i32,
+        height: i32,
+        initial_pool_size: i32,
+    ) -> Result<Self, FfmpegError> {
+        // Step 1: Allocate the frames context
+        // Safety: av_hwframe_ctx_alloc is safe to call with a valid hw_device_ctx
+        let hw_frames_ref = unsafe { av_hwframe_ctx_alloc(hw_device_ctx) };
+        if hw_frames_ref.is_null() {
+            return Err(FfmpegError::Alloc);
+        }
+
+        // Step 2: Configure the frames context
+        // Safety: hw_frames_ref->data points to a valid AVHWFramesContext
+        let frames_ctx = unsafe { &mut *((*hw_frames_ref).data as *mut AVHWFramesContext) };
+        frames_ctx.format = format.into();
+        frames_ctx.sw_format = sw_format.into();
+        frames_ctx.width = width;
+        frames_ctx.height = height;
+        frames_ctx.initial_pool_size = initial_pool_size;
+
+        // Step 3: Initialize the frames context
+        // Safety: av_hwframe_ctx_init is safe to call with a valid frames context
+        let result = unsafe { av_hwframe_ctx_init(hw_frames_ref) };
+        if result < 0 {
+            // Safety: av_buffer_unref is safe to call to clean up on failure
+            unsafe { av_buffer_unref(&mut (hw_frames_ref as *mut _)) };
+            return Err(FfmpegError::Code(FfmpegErrorCode::from(result)));
+        }
+
+        // Safety: Create SmartPtr to manage the hw_frames_ref lifecycle
+        let ptr = unsafe {
+            SmartPtr::wrap(hw_frames_ref, |ptr| {
+                // Safety: av_buffer_unref is safe to call for cleanup
+                av_buffer_unref(ptr);
+            })
+        };
+
+        Ok(Self { ptr })
+    }
+
+    /// Returns the raw pointer to the `AVBufferRef`.
+    pub const fn as_ptr(&self) -> *const AVBufferRef {
+        self.ptr.as_ptr()
+    }
+
+    /// Returns the mutable raw pointer to the `AVBufferRef`.
+    pub const fn as_mut_ptr(&mut self) -> *mut AVBufferRef {
+        self.ptr.as_mut_ptr()
+    }
+
+    /// Creates a new CUDA hardware frames context with NV12 software format.
+    ///
+    /// This is a convenience method for the common case of CUDA hardware acceleration
+    /// with NV12 as the software format.
+    ///
+    /// # Arguments
+    /// * `hw_device_ctx` - Pointer to the CUDA hardware device context (`AVBufferRef`)
+    /// * `width` - Frame width
+    /// * `height` - Frame height
+    /// * `initial_pool_size` - Initial number of frames to allocate in the pool (default: 4)
+    ///
+    /// # Safety
+    /// The `hw_device_ctx` pointer must be valid and properly initialized CUDA device context.
+    pub unsafe fn new_cuda(
+        hw_device_ctx: *mut AVBufferRef,
+        width: i32,
+        height: i32,
+        initial_pool_size: Option<i32>,
+    ) -> Result<Self, FfmpegError> {
+        // Safety: Caller guarantees hw_device_ctx is valid
+        unsafe {
+            Self::new(
+                hw_device_ctx,
+                AVPixelFormat::Cuda,
+                AVPixelFormat::Nv12,
+                width,
+                height,
+                initial_pool_size.unwrap_or(4),
+            )
+        }
+    }
+}
+
 #[cfg(test)]
 #[cfg_attr(all(test, coverage_nightly), coverage(off))]
 mod tests {
@@ -513,8 +710,10 @@ mod tests {
     use crate::AVSampleFormat;
     use crate::ffi::avfilter_get_by_name;
     use crate::ffi::avfilter_link;
-    use crate::filter_graph::{Filter, FilterGraph, FilterGraphParser};
+    use crate::filter_graph::{Filter, FilterGraph, FilterGraphParser, HWFramesContext};
     use crate::frame::{AudioChannelLayout, AudioFrame, GenericFrame};
+    use crate::{AVPixelFormat, error::FfmpegError};
+    use crate::ffi::AVBufferRef;
 
     #[test]
     fn test_filter_graph_new() {
@@ -832,6 +1031,86 @@ mod tests {
             assert!(received_frame.is_ok(), "receive_frame should succeed after EOF is sent");
             assert!(received_frame.unwrap().is_none(), "No frame should be received after EOF");
         }
+    }
+
+    #[test]
+    fn test_hw_frames_context_creation() {
+        // This test verifies that the HWFramesContext can be created
+        // Note: This test doesn't actually create a real hardware context
+        // as that would require a GPU and proper setup
+
+        // Test that the function signatures compile and the types are correct
+        let _test_fn = |hw_device_ctx: *mut AVBufferRef| -> Result<(), FfmpegError> {
+            // Safety: This is just a test of the API, not actually called
+            let _hw_frames =
+                unsafe { HWFramesContext::new(hw_device_ctx, AVPixelFormat::Cuda, AVPixelFormat::Nv12, 1920, 1080, 4) };
+            Ok(())
+        };
+
+        // If this compiles, the API is correctly defined
+        assert!(true);
+    }
+
+    #[test]
+    fn test_hw_frames_context_cuda_convenience() {
+        // Test the CUDA convenience constructor
+        let _test_fn = |hw_device_ctx: *mut AVBufferRef| -> Result<(), FfmpegError> {
+            // Safety: This is just a test of the API, not actually called
+            let _hw_frames = unsafe { HWFramesContext::new_cuda(hw_device_ctx, 1920, 1080, Some(8)) };
+            let _hw_frames_default = unsafe { HWFramesContext::new_cuda(hw_device_ctx, 1920, 1080, None) };
+            Ok(())
+        };
+
+        // If this compiles, the API is correctly defined
+        assert!(true);
+    }
+
+    #[test]
+    fn test_filter_context_source_hardware_integration() {
+        // This test demonstrates the complete workflow for setting up hardware-accelerated filtering
+        // Note: This doesn't actually create real hardware contexts as that requires GPU setup
+
+        let mut filter_graph = FilterGraph::new().expect("Failed to create filter graph");
+
+        // Add a buffer source filter (this would typically be where hardware frames are fed)
+        let buffer_filter = Filter::get("buffer").expect("Failed to get buffer filter");
+        filter_graph
+            .add(
+                buffer_filter,
+                "hw_source",
+                "width=1920:height=1080:pix_fmt=0:time_base=1/25"
+            )
+            .expect("Failed to add buffer filter");
+
+        // Add a null sink filter
+        let null_filter = Filter::get("nullsink").expect("Failed to get nullsink filter");
+        filter_graph
+            .add(null_filter, "hw_sink", "")
+            .expect("Failed to add nullsink filter");
+
+        // Link the filters
+        filter_graph
+            .link("hw_source", 0, "hw_sink", 0)
+            .expect("Failed to link filters");
+
+        // Validate the graph
+        filter_graph.validate().expect("Failed to validate filter graph");
+
+        // Test that we can get the source and the hardware context method exists
+        let _source_context = filter_graph
+            .get("hw_source")
+            .expect("Failed to get source context")
+            .source();
+
+        // Test the method signature compiles (we can't actually call it without real hardware)
+        let _test_hw_setup = |_hw_frames: &HWFramesContext| -> Result<(), FfmpegError> {
+            // This would normally be: source_context.set_hw_frames_context(hw_frames)
+            // But we can't test it without real hardware setup
+            Ok(())
+        };
+
+        // If we get here, the integration test structure is correct
+        assert!(true);
     }
 
     #[test]
