@@ -251,6 +251,13 @@ impl GenericDecoder {
         }
     }
 
+    /// Returns the hardware device context buffer reference pointer.
+    /// Returns `None` if no hardware acceleration is configured.
+    pub fn hw_device_ctx(&self) -> Option<*mut AVBufferRef> {
+        let ctx = self.decoder.as_deref_except().hw_device_ctx;
+        if ctx.is_null() { None } else { Some(ctx) }
+    }
+
     /// Sends a packet to the decoder.
     pub fn send_packet(&mut self, packet: &Packet) -> Result<(), FfmpegError> {
         // Safety: `packet` is a valid pointer, and `self.decoder` is a valid pointer.
