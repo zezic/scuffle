@@ -563,7 +563,7 @@ impl FilterContextSource<'_> {
 
         // Clean up the parameters struct (FFmpeg now owns hw_frames_ctx)
         // Safety: av_freep is safe to call for cleanup
-        unsafe { av_freep(params as *mut _ as *mut libc::c_void) };
+        // unsafe { av_freep(params as *mut _ as *mut libc::c_void) };
 
         if result < 0 {
             return Err(FfmpegError::Code(FfmpegErrorCode::from(result)));
@@ -708,12 +708,12 @@ mod tests {
     use std::ffi::CString;
 
     use crate::AVSampleFormat;
+    use crate::ffi::AVBufferRef;
     use crate::ffi::avfilter_get_by_name;
     use crate::ffi::avfilter_link;
     use crate::filter_graph::{Filter, FilterGraph, FilterGraphParser, HWFramesContext};
     use crate::frame::{AudioChannelLayout, AudioFrame, GenericFrame};
     use crate::{AVPixelFormat, error::FfmpegError};
-    use crate::ffi::AVBufferRef;
 
     #[test]
     fn test_filter_graph_new() {
@@ -1075,11 +1075,7 @@ mod tests {
         // Add a buffer source filter (this would typically be where hardware frames are fed)
         let buffer_filter = Filter::get("buffer").expect("Failed to get buffer filter");
         filter_graph
-            .add(
-                buffer_filter,
-                "hw_source",
-                "width=1920:height=1080:pix_fmt=0:time_base=1/25"
-            )
+            .add(buffer_filter, "hw_source", "width=1920:height=1080:pix_fmt=0:time_base=1/25")
             .expect("Failed to add buffer filter");
 
         // Add a null sink filter
@@ -1097,10 +1093,7 @@ mod tests {
         filter_graph.validate().expect("Failed to validate filter graph");
 
         // Test that we can get the source and the hardware context method exists
-        let _source_context = filter_graph
-            .get("hw_source")
-            .expect("Failed to get source context")
-            .source();
+        let _source_context = filter_graph.get("hw_source").expect("Failed to get source context").source();
 
         // Test the method signature compiles (we can't actually call it without real hardware)
         let _test_hw_setup = |_hw_frames: &HWFramesContext| -> Result<(), FfmpegError> {
