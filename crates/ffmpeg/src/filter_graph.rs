@@ -563,7 +563,7 @@ impl FilterContextSource<'_> {
 
         // Clean up the parameters struct (FFmpeg now owns hw_frames_ctx)
         // Safety: av_freep is safe to call for cleanup
-        // unsafe { av_freep(params as *mut _ as *mut libc::c_void) };
+        unsafe { av_free(params as *mut libc::c_void) };
 
         if result < 0 {
             return Err(FfmpegError::Code(FfmpegErrorCode::from(result)));
