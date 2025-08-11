@@ -545,16 +545,18 @@ impl FilterContextSource<'_> {
 
         // Step 1: Set the hw_frames_ctx in the parameters
         // Safety: av_buffer_ref creates a new reference to the hw_frames_ctx
-        let hw_frames_ref = unsafe { av_buffer_ref(hw_frames_ctx.as_ptr() as *mut _) };
-        if hw_frames_ref.is_null() {
-            // Safety: av_freep is safe to call for cleanup and sets pointer to NULL
-            unsafe { av_freep(params as *mut _ as *mut libc::c_void) };
-            return Err(FfmpegError::Alloc);
-        }
 
-        // Safety: params is valid and hw_frames_ref is a valid reference
+        // let hw_frames_ref = unsafe { av_buffer_ref(hw_frames_ctx.as_ptr() as *mut _) };
+        // if hw_frames_ref.is_null() {
+        //     // Safety: av_freep is safe to call for cleanup and sets pointer to NULL
+        //     unsafe { av_freep(params as *mut _ as *mut libc::c_void) };
+        //     return Err(FfmpegError::Alloc);
+        // }
+        // Instead of creating a new reference, we must use the existing one
+
+        // Safety: params is valid and hw_frames_ctx is a valid reference
         unsafe {
-            (*params).hw_frames_ctx = hw_frames_ref;
+            (*params).hw_frames_ctx = hw_frames_ctx.as_ptr() as *mut _;
         }
 
         // Step 2: Apply the parameters to the filter context
