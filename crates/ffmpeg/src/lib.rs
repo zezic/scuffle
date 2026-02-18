@@ -289,6 +289,8 @@
 
 /// Codec specific functionality.
 pub mod codec;
+/// Codec parameters for remuxing without transcoding.
+pub mod codec_parameters;
 /// Constants.
 pub mod consts;
 /// Decoder specific functionality.
