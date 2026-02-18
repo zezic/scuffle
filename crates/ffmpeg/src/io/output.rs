@@ -2,6 +2,7 @@ use std::ffi::CString;
 use std::ptr::NonNull;
 
 use super::internal::{Inner, InnerOptions, seek, write_packet};
+use crate::codec_parameters::CodecParameters;
 use crate::consts::DEFAULT_BUFFER_SIZE;
 use crate::dict::Dictionary;
 use crate::error::{FfmpegError, FfmpegErrorCode};
@@ -205,6 +206,35 @@ impl<T: Send + Sync> Output<T> {
         out_stream.set_time_base(stream.time_base());
         out_stream.set_start_time(stream.start_time());
         out_stream.set_duration(stream.duration());
+
+        Ok(Some(out_stream))
+    }
+
+    /// Creates a new stream in the output from the given codec parameters.
+    ///
+    /// This is useful for remuxing scenarios where codec parameters have been
+    /// extracted from an input stream and stored externally.
+    pub fn add_stream_from_codec_parameters<'a>(
+        &'a mut self,
+        params: &CodecParameters,
+    ) -> Result<Option<Stream<'a>>, FfmpegError> {
+        // Safety: `avformat_new_stream` is safe to call.
+        let Some(mut out_stream) = NonNull::new(unsafe { avformat_new_stream(self.as_mut_ptr(), std::ptr::null()) }) else {
+            return Ok(None);
+        };
+
+        // Safety: The stream is a valid non-null pointer.
+        let out_stream = unsafe { out_stream.as_mut() };
+
+        // Safety: `avcodec_parameters_copy` is safe to call when all arguments are valid.
+        FfmpegErrorCode(unsafe { avcodec_parameters_copy(out_stream.codecpar, params.as_ptr()) }).result()?;
+
+        out_stream.id = self.inner.context.as_deref_except().nb_streams as i32 - 1;
+
+        let mut out_stream = Stream::new(out_stream, self.inner.context.as_mut_ptr());
+        out_stream.set_time_base(params.time_base());
+        out_stream.set_start_time(params.start_time());
+        out_stream.set_duration(params.duration());
 
         Ok(Some(out_stream))
     }
