@@ -309,6 +309,28 @@ impl GenericDecoder {
         Ok(())
     }
 
+    /// Flushes the decoder, draining all buffered frames and collecting them
+    /// into a [`Vec`].
+    ///
+    /// This sends an EOF signal, receives every remaining frame, then resets
+    /// the decoder so that new packets can be sent afterwards.  Use this when
+    /// you need to force-drain buffered frames mid-stream (e.g. on a seek or
+    /// when you need all frames *right now*).
+    pub fn flush(&mut self) -> Result<Vec<GenericFrame>, FfmpegError> {
+        self.send_eof()?;
+
+        let mut frames = Vec::new();
+        while let Some(frame) = self.receive_frame()? {
+            frames.push(frame);
+        }
+
+        // Reset internal codec state so new packets can be accepted.
+        // Safety: `self.decoder` is a valid, opened codec context.
+        unsafe { avcodec_flush_buffers(self.decoder.as_mut_ptr()) };
+
+        Ok(frames)
+    }
+
     /// Receives a frame from the decoder.
     pub fn receive_frame(&mut self) -> Result<Option<GenericFrame>, FfmpegError> {
         let mut frame = GenericFrame::new()?;
@@ -879,6 +901,86 @@ mod tests {
             low_delay.len(),
             frame_threaded.len(),
             "Both configurations should produce the same number of frames",
+        );
+    }
+
+    #[test]
+    fn test_flush_forces_buffered_frames_out() {
+        let valid_file_path = "../../assets/avc_aac_large.mp4";
+        let mut input = Input::open(valid_file_path).expect("Failed to open valid file");
+        let streams = input.streams();
+        let video_stream = streams.best(AVMediaType::Video).expect("No video stream found");
+        let video_stream_index = video_stream.index();
+
+        // Use default (frame-threaded) config so the decoder actually buffers.
+        let mut decoder = Decoder::with_options(
+            &video_stream,
+            DecoderOptions {
+                codec: Some(DecoderCodec::new(AVCodecID::H264).expect("codec")),
+                thread_count: 4,
+                hardware_acceleration: None,
+                ..Default::default()
+            },
+        )
+        .expect("Failed to create Decoder")
+        .video()
+        .expect("Failed to get video decoder");
+
+        // Send a handful of packets — with frame threading + B-frames the
+        // decoder will be buffering internally and receive_frame returns None.
+        let mut packets_sent = 0usize;
+        let mut frames_before_flush = 0usize;
+        while let Some(packet) = input.receive_packet().expect("receive_packet") {
+            if packet.stream_index() != video_stream_index {
+                continue;
+            }
+            decoder.send_packet(&packet).expect("send_packet");
+            packets_sent += 1;
+
+            while let Some(_) = decoder.receive_frame().expect("receive_frame") {
+                frames_before_flush += 1;
+            }
+
+            if packets_sent >= 5 {
+                break;
+            }
+        }
+
+        // Flush: this should force all buffered frames out.
+        let flushed = decoder.flush().expect("flush");
+        assert!(
+            !flushed.is_empty(),
+            "flush() should have returned buffered frames, but got none \
+             (packets_sent={packets_sent}, frames_before_flush={frames_before_flush})",
+        );
+
+        let total_after_flush = frames_before_flush + flushed.len();
+        assert!(
+            total_after_flush > frames_before_flush,
+            "flush() must produce additional frames beyond what receive_frame already returned",
+        );
+
+        // After flush the decoder should accept new packets and keep working.
+        let mut frames_after_flush = 0usize;
+        while let Some(packet) = input.receive_packet().expect("receive_packet") {
+            if packet.stream_index() != video_stream_index {
+                continue;
+            }
+            decoder.send_packet(&packet).expect("send_packet after flush");
+            while let Some(_) = decoder.receive_frame().expect("receive_frame after flush") {
+                frames_after_flush += 1;
+            }
+        }
+
+        // Final drain.
+        decoder.send_eof().expect("send_eof");
+        while let Some(_) = decoder.receive_frame().expect("receive_frame final") {
+            frames_after_flush += 1;
+        }
+
+        assert!(
+            frames_after_flush > 0,
+            "Decoder should produce frames after flush() + new packets",
         );
     }
 }
