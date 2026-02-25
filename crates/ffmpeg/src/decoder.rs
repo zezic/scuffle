@@ -77,12 +77,39 @@ pub struct HardwareAccelerationOptions {
     pub hw_pixel_format: AVPixelFormat,
 }
 
+/// Controls which multithreading method the decoder uses.
+///
+/// Frame threading (`Frame`) decodes multiple frames in parallel but adds
+/// `thread_count - 1` frames of latency.  Slice threading (`Slice`) decodes
+/// slices of a single frame in parallel with **no** additional latency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadType {
+    /// Decode different frames in parallel (adds latency).
+    Frame,
+    /// Decode different slices of a single frame in parallel (no extra latency).
+    Slice,
+    /// Allow both frame and slice threading (FFmpeg default).
+    FrameAndSlice,
+}
+
 /// Options for creating a [`Decoder`].
 pub struct DecoderOptions {
     /// The codec to use for decoding.
     pub codec: Option<DecoderCodec>,
     /// The number of threads to use for decoding.
     pub thread_count: i32,
+    /// Which multithreading method to use. Defaults to `FrameAndSlice`.
+    ///
+    /// For low-latency decoding, use [`ThreadType::Slice`] to get parallelism
+    /// without the frame-threading latency penalty.
+    pub thread_type: ThreadType,
+    /// Force low-delay mode (`AV_CODEC_FLAG_LOW_DELAY`).
+    ///
+    /// When enabled this disables frame threading entirely and signals to the
+    /// codec that low-delay output is desired.  Combine with
+    /// [`ThreadType::Slice`] and a suitable `thread_count` to get parallel
+    /// decoding without buffering extra frames.
+    pub low_delay: bool,
     /// The hardware acceleration options to use for decoding.
     pub hardware_acceleration: Option<HardwareAccelerationOptions>,
 }
@@ -93,6 +120,8 @@ impl Default for DecoderOptions {
         Self {
             codec: None,
             thread_count: 1,
+            thread_type: ThreadType::FrameAndSlice,
+            low_delay: false,
             hardware_acceleration: None,
         }
     }
@@ -144,6 +173,14 @@ impl Decoder {
         decoder_mut.pkt_timebase = ist.time_base().into();
         decoder_mut.time_base = ist.time_base().into();
         decoder_mut.thread_count = options.thread_count;
+        decoder_mut.thread_type = match options.thread_type {
+            ThreadType::Frame => FF_THREAD_FRAME as i32,
+            ThreadType::Slice => FF_THREAD_SLICE as i32,
+            ThreadType::FrameAndSlice => (FF_THREAD_FRAME | FF_THREAD_SLICE) as i32,
+        };
+        if options.low_delay {
+            decoder_mut.flags |= AV_CODEC_FLAG_LOW_DELAY as i32;
+        }
 
         if let Some(hw_accel) = options.hardware_acceleration {
             let HardwareAccelerationOptions {
@@ -405,6 +442,7 @@ mod tests {
             codec: Some(DecoderCodec::new(AVCodecID::H264).expect("Failed to find H264 codec")),
             thread_count: 2,
             hardware_acceleration: None,
+            ..Default::default()
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let generic_decoder = match decoder {
@@ -449,6 +487,7 @@ mod tests {
             codec: Some(DecoderCodec::new(AVCodecID::H264).expect("Failed to find H264 codec")),
             thread_count: 2,
             hardware_acceleration: None,
+            ..Default::default()
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
 
@@ -503,6 +542,7 @@ mod tests {
             codec: Some(DecoderCodec::new(AVCodecID::Aac).expect("Failed to find AAC codec")),
             thread_count: 2,
             hardware_acceleration: None,
+            ..Default::default()
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let audio_decoder = match decoder {
@@ -629,6 +669,7 @@ mod tests {
             codec: None,
             thread_count: 2,
             hardware_acceleration: None,
+            ..Default::default()
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let mut video_decoder = match decoder {
@@ -666,6 +707,7 @@ mod tests {
             codec: None,
             thread_count: 2,
             hardware_acceleration: None,
+            ..Default::default()
         };
         let decoder = Decoder::with_options(&stream, decoder_options).expect("Failed to create Decoder");
         let mut audio_decoder = match decoder {
@@ -733,5 +775,110 @@ mod tests {
 
         insta::assert_debug_snapshot!("test_decoder_video", video_frames);
         insta::assert_debug_snapshot!("test_decoder_audio", audio_frames);
+    }
+
+    /// Helper: creates a video decoder with the given options for the test asset,
+    /// sends packets one at a time and records how many packets were sent before
+    /// each frame was received. Returns the list of "packets sent so far" values,
+    /// one entry per decoded frame (in decode-output order).
+    fn packets_before_frames(options: DecoderOptions) -> Vec<usize> {
+        let valid_file_path = "../../assets/avc_aac_large.mp4";
+        let mut input = Input::open(valid_file_path).expect("Failed to open valid file");
+        let streams = input.streams();
+        let video_stream = streams.best(AVMediaType::Video).expect("No video stream found");
+        let video_stream_index = video_stream.index();
+
+        let mut decoder = Decoder::with_options(&video_stream, options)
+            .expect("Failed to create Decoder")
+            .video()
+            .expect("Failed to get video decoder");
+
+        let mut result = Vec::new();
+        let mut packets_sent: usize = 0;
+
+        while let Some(packet) = input.receive_packet().expect("Failed to receive packet") {
+            if packet.stream_index() != video_stream_index {
+                continue;
+            }
+            decoder.send_packet(&packet).expect("Failed to send packet");
+            packets_sent += 1;
+
+            while let Some(_frame) = decoder.receive_frame().expect("Failed to receive frame") {
+                result.push(packets_sent);
+            }
+        }
+
+        // Flush
+        decoder.send_eof().expect("Failed to send eof");
+        while let Some(_frame) = decoder.receive_frame().expect("Failed to receive frame") {
+            result.push(packets_sent);
+        }
+
+        result
+    }
+
+    #[test]
+    fn test_frame_threading_adds_latency() {
+        use crate::decoder::ThreadType;
+
+        // Default-ish config with frame threading and multiple threads:
+        // the decoder must buffer thread_count-1 extra frames from threading
+        // plus has_b_frames frames from H264 reordering.
+        let buffered = packets_before_frames(DecoderOptions {
+            codec: Some(DecoderCodec::new(AVCodecID::H264).expect("codec")),
+            thread_count: 4,
+            thread_type: ThreadType::Frame,
+            low_delay: false,
+            hardware_acceleration: None,
+        });
+
+        // The first frame should not come out until several packets have been
+        // sent (thread_count-1 = 3 from frame threading + has_b_frames = 2
+        // from H264 reorder = at least 5 packets before first output).
+        assert!(
+            buffered[0] >= 4,
+            "With frame threading (4 threads) the first frame should require >= 4 packets, got {}",
+            buffered[0],
+        );
+    }
+
+    #[test]
+    fn test_low_delay_slice_threading_reduces_latency() {
+        use crate::decoder::ThreadType;
+
+        // Low-delay + slice-only threading: no frame-threading pipeline delay,
+        // only the H264 reorder buffer (has_b_frames from the stream content).
+        let low_delay = packets_before_frames(DecoderOptions {
+            codec: Some(DecoderCodec::new(AVCodecID::H264).expect("codec")),
+            thread_count: 4,
+            thread_type: ThreadType::Slice,
+            low_delay: true,
+            hardware_acceleration: None,
+        });
+
+        // Also measure the default frame-threading config for comparison.
+        let frame_threaded = packets_before_frames(DecoderOptions {
+            codec: Some(DecoderCodec::new(AVCodecID::H264).expect("codec")),
+            thread_count: 4,
+            thread_type: ThreadType::Frame,
+            low_delay: false,
+            hardware_acceleration: None,
+        });
+
+        // Low-delay should produce the first frame strictly sooner than
+        // frame threading (which adds thread_count-1 extra frames of delay).
+        assert!(
+            low_delay[0] < frame_threaded[0],
+            "Low-delay first frame after {} packets, frame-threaded after {} — expected low_delay < frame_threaded",
+            low_delay[0],
+            frame_threaded[0],
+        );
+
+        // Both should decode the same total number of frames.
+        assert_eq!(
+            low_delay.len(),
+            frame_threaded.len(),
+            "Both configurations should produce the same number of frames",
+        );
     }
 }

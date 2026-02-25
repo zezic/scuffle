@@ -67,6 +67,7 @@ fn main() -> Result<(), FfmpegError> {
             hw_device_type,
             hw_pixel_format: hw_pix_fmt.unwrap(),
         }),
+        ..Default::default()
     };
     let mut video_decoder = Decoder::with_options(&best_video_stream, options).unwrap().video().unwrap();
 
