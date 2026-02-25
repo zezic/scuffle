@@ -379,6 +379,11 @@ impl VideoDecoder {
     pub fn receive_frame(&mut self) -> Result<Option<VideoFrame>, FfmpegError> {
         Ok(self.0.receive_frame()?.map(|frame| frame.video()))
     }
+
+    /// Flushes decoder and forces it to return frames.
+    pub fn flush(&mut self) -> Result<Vec<VideoFrame>, FfmpegError> {
+        Ok(self.0.flush()?.into_iter().map(|frame| frame.video()).collect())
+    }
 }
 
 impl std::ops::Deref for VideoDecoder {
