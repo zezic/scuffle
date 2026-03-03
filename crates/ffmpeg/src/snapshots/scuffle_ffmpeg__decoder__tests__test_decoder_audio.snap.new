@@ -1,6 +1,6 @@
 ---
 source: crates/ffmpeg/src/decoder.rs
-assertion_line: 777
+assertion_line: 804
 expression: audio_frames
 ---
 [

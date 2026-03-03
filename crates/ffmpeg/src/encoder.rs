@@ -44,6 +44,12 @@ pub struct VideoEncoderSettings {
     codec_specific_options: Option<Dictionary>,
     flags: Option<i32>,
     flags2: Option<i32>,
+    /// Force low-delay mode (`AV_CODEC_FLAG_LOW_DELAY`).
+    ///
+    /// For x264, combine this with `codec_specific_options` containing
+    /// `tune=zerolatency` and `max_b_frames(0)` to get truly non-buffering
+    /// encoding (one packet out per frame in).
+    low_delay: Option<bool>,
 }
 
 impl VideoEncoderSettings {
@@ -75,6 +81,9 @@ impl VideoEncoderSettings {
         encoder.max_b_frames = self.max_b_frames.unwrap_or(encoder.max_b_frames);
         encoder.flags = self.flags.unwrap_or(encoder.flags);
         encoder.flags2 = self.flags2.unwrap_or(encoder.flags2);
+        if self.low_delay.unwrap_or(false) {
+            encoder.flags |= AV_CODEC_FLAG_LOW_DELAY as i32;
+        }
 
         Ok(())
     }
@@ -348,7 +357,7 @@ mod tests {
     use crate::dict::Dictionary;
     use crate::encoder::{AudioChannelLayout, AudioEncoderSettings, Encoder, EncoderSettings, VideoEncoderSettings};
     use crate::error::FfmpegError;
-    use crate::ffi::AVCodecContext;
+    use crate::ffi::{AVCodecContext, AV_CODEC_FLAG_LOW_DELAY};
     use crate::io::{Input, Output, OutputOptions};
     use crate::rational::Rational;
     use crate::{AVChannelOrder, AVCodecID, AVMediaType, AVPixelFormat, AVSampleFormat};
@@ -376,6 +385,8 @@ mod tests {
         let flags = 0x01;
         let flags2 = 0x02;
 
+        let low_delay = true;
+
         let settings = VideoEncoderSettings::builder()
             .width(width)
             .height(height)
@@ -395,6 +406,7 @@ mod tests {
             .codec_specific_options(codec_specific_options)
             .flags(flags)
             .flags2(flags2)
+            .low_delay(low_delay)
             .build();
 
         assert_eq!(settings.width, width);
@@ -418,6 +430,7 @@ mod tests {
         assert_eq!(actual_codec_specific_options.get(c"crf"), Some(c"23"));
         assert_eq!(settings.flags, Some(flags));
         assert_eq!(settings.flags2, Some(flags2));
+        assert_eq!(settings.low_delay, Some(low_delay));
 
         // Safety: We are zeroing the memory for the encoder context.
         let mut encoder = unsafe { std::mem::zeroed::<AVCodecContext>() };
@@ -439,7 +452,7 @@ mod tests {
         assert_eq!(encoder.rc_max_rate, rc_max_rate);
         assert_eq!(encoder.rc_buffer_size, rc_buffer_size);
         assert_eq!(encoder.max_b_frames, max_b_frames);
-        assert_eq!(encoder.flags, flags);
+        assert_eq!(encoder.flags, flags | AV_CODEC_FLAG_LOW_DELAY as i32);
         assert_eq!(encoder.flags2, flags2);
     }
 
@@ -898,5 +911,91 @@ mod tests {
                 .build(),
         )
         .expect("Failed to create new Encoder");
+    }
+
+    #[test]
+    fn test_encoder_low_latency_x264() {
+        let codec = EncoderCodec::by_name("libx264").expect("libx264 encoder should be available");
+
+        let mut input = Input::open("../../assets/avc_aac.mp4").expect("Failed to open input file");
+        let streams = input.streams();
+        let video_stream = streams.best(AVMediaType::Video).expect("No video stream found");
+        let input_stream_index = video_stream.index();
+
+        let mut decoder = Decoder::new(&video_stream)
+            .expect("Failed to create decoder")
+            .video()
+            .expect("Failed to create video decoder");
+
+        let mut output = Output::seekable(
+            std::io::Cursor::new(Vec::new()),
+            OutputOptions::builder().format_name("mp4").unwrap().build(),
+        )
+        .expect("Failed to create Output");
+
+        let mut codec_options = Dictionary::new();
+        codec_options.set("preset", "ultrafast").unwrap();
+        codec_options.set("tune", "zerolatency").unwrap();
+
+        let bitrate = 1_000_000i64;
+
+        let mut encoder = Encoder::new(
+            codec,
+            &mut output,
+            AVRational { num: 1, den: 1000 },
+            video_stream.time_base(),
+            VideoEncoderSettings::builder()
+                .width(decoder.width())
+                .height(decoder.height())
+                .frame_rate(decoder.frame_rate())
+                .pixel_format(decoder.pixel_format())
+                .max_b_frames(0)
+                .bitrate(bitrate)
+                .rc_max_rate(bitrate)
+                .rc_buffer_size(bitrate as i32)
+                .codec_specific_options(codec_options)
+                .low_delay(true)
+                .build(),
+        )
+        .expect("Failed to create encoder");
+
+        output.write_header().expect("Failed to write header");
+
+        let mut frames_sent = 0usize;
+        let mut packets_received = 0usize;
+
+        while let Some(packet) = input.receive_packet().expect("Failed to receive packet") {
+            if packet.stream_index() != input_stream_index {
+                continue;
+            }
+            decoder.send_packet(&packet).expect("Failed to send packet");
+            while let Some(frame) = decoder.receive_frame().expect("Failed to receive frame") {
+                encoder.send_frame(&frame).expect("Failed to send frame");
+                frames_sent += 1;
+
+                // With zerolatency tune, each frame should produce a packet immediately.
+                while let Some(pkt) = encoder.receive_packet().expect("Failed to receive packet") {
+                    packets_received += 1;
+                    output.write_packet(&pkt).expect("Failed to write packet");
+                }
+            }
+        }
+
+        // Drain any remaining packets.
+        encoder.send_eof().expect("Failed to send EOF");
+        while let Some(pkt) = encoder.receive_packet().expect("Failed to receive packet") {
+            packets_received += 1;
+            output.write_packet(&pkt).expect("Failed to write packet");
+        }
+
+        output.write_trailer().expect("Failed to write trailer");
+
+        // With zerolatency tune + bframes=0, every frame should produce a
+        // packet immediately — so total packets == total frames.
+        assert_eq!(
+            packets_received, frames_sent,
+            "Expected one packet per frame with zerolatency tune, got {packets_received} packets for {frames_sent} frames",
+        );
+        assert!(frames_sent > 0, "Should have encoded at least one frame");
     }
 }
