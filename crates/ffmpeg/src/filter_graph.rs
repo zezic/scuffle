@@ -208,6 +208,51 @@ impl FilterGraph {
         }))
     }
 
+    /// Add a hardware-accelerated buffer source filter to the filter graph.
+    ///
+    /// Unlike [`add`], this uses the two-step alloc+init approach required for
+    /// HW pixel formats: allocates the filter, sets `hw_frames_ctx` via
+    /// `av_buffersrc_parameters_set`, then initializes with `avfilter_init_str`.
+    pub fn add_hw_buffersrc(
+        &mut self,
+        filter: Filter,
+        name: &str,
+        args: &str,
+        hw_frames_ctx: &mut HWFramesContext,
+    ) -> Result<FilterContext<'_>, FfmpegError> {
+        let name_c = CString::new(name).or(Err(FfmpegError::Arguments("name must be non-empty")))?;
+        let args_c = CString::new(args).or(Err(FfmpegError::Arguments("args must be non-empty")))?;
+
+        // Step 1: Allocate filter without initializing
+        let filter_context = unsafe {
+            avfilter_graph_alloc_filter(self.as_mut_ptr(), filter.as_ptr(), name_c.as_ptr())
+        };
+        if filter_context.is_null() {
+            return Err(FfmpegError::Alloc);
+        }
+
+        // Step 2: Set hw_frames_ctx via buffersrc parameters
+        // av_buffersrc_parameters_set takes ownership of hw_frames_ctx, so we must
+        // create a new reference to avoid double-free when our HWFramesContext drops.
+        let params = unsafe { av_buffersrc_parameters_alloc() };
+        if params.is_null() {
+            return Err(FfmpegError::Alloc);
+        }
+        unsafe {
+            (*params).hw_frames_ctx = av_buffer_ref(hw_frames_ctx.as_mut_ptr());
+        }
+        let ret = unsafe { av_buffersrc_parameters_set(filter_context, params) };
+        unsafe { av_free(params as *mut libc::c_void) };
+        FfmpegErrorCode(ret).result()?;
+
+        // Step 3: Initialize the filter with args
+        FfmpegErrorCode(unsafe { avfilter_init_str(filter_context, args_c.as_ptr()) }).result()?;
+
+        Ok(FilterContext(unsafe {
+            NonNull::new(filter_context).ok_or(FfmpegError::Alloc)?.as_mut()
+        }))
+    }
+
     /// Get a filter context by name.
     pub fn get(&mut self, name: &str) -> Option<FilterContext<'_>> {
         let name = CString::new(name).ok()?;
@@ -659,6 +704,22 @@ impl HWFramesContext {
         };
 
         Ok(Self { ptr })
+    }
+
+    /// Wraps an existing `AVBufferRef*` (e.g. from a decoded frame's `hw_frames_ctx`).
+    /// Creates a new reference via `av_buffer_ref` so the original remains valid.
+    ///
+    /// # Safety
+    /// The pointer must be a valid `AVBufferRef` pointing to an `AVHWFramesContext`.
+    pub unsafe fn from_existing(hw_frames_ctx: *mut AVBufferRef) -> Self {
+        let ref_ptr = unsafe { av_buffer_ref(hw_frames_ctx) };
+        assert!(!ref_ptr.is_null(), "av_buffer_ref returned null");
+        let ptr = unsafe {
+            SmartPtr::wrap(ref_ptr, |ptr: &mut *mut AVBufferRef| {
+                av_buffer_unref(ptr);
+            })
+        };
+        Self { ptr }
     }
 
     /// Returns the raw pointer to the `AVBufferRef`.

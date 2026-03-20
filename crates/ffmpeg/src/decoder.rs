@@ -201,6 +201,10 @@ impl Decoder {
             .result()?;
 
             decoder_mut.hw_device_ctx = hw_device_ctx;
+
+            // Note: we do NOT set hw_frames_ctx on the decoder here.
+            // With custom I/O readers, VT auto-transfers frames to CPU (yuv420p).
+            // The TransferThenScale scaler handles both GPU and CPU frames at runtime.
         }
 
         if AVMediaType(decoder_mut.codec_type) == AVMediaType::Video {
@@ -259,10 +263,14 @@ unsafe extern "C" fn get_hw_format(ctx: *mut AVCodecContext, pix_fmts: *const i3
 
     // Iterate through available formats
     let mut p = pix_fmts;
+    let mut first_format = None;
     loop {
         let current_format = AVPixelFormat::from(unsafe { *p });
         if current_format == AVPixelFormat::None {
             break;
+        }
+        if first_format.is_none() {
+            first_format = Some(current_format);
         }
         if current_format == preferred_format {
             return current_format.into();
@@ -270,7 +278,9 @@ unsafe extern "C" fn get_hw_format(ctx: *mut AVCodecContext, pix_fmts: *const i3
         p = unsafe { p.add(1) };
     }
 
-    AVPixelFormat::None.into() // AV_PIX_FMT_NONE
+    // HW format not available — return first software format so decoding still works
+    let fmt: i32 = first_format.unwrap_or(AVPixelFormat::None).into();
+    fmt
 }
 
 impl GenericDecoder {

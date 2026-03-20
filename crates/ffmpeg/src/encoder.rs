@@ -11,6 +11,29 @@ use crate::rational::Rational;
 use crate::smart_object::SmartPtr;
 use crate::{AVFormatFlags, AVPixelFormat, AVSampleFormat};
 
+/// Wrapper around a raw `*mut AVBufferRef` for hardware device context.
+/// Implements Default (null pointer) so bon::Builder can use `#[builder(default)]`.
+#[derive(Clone, Copy)]
+pub struct HwDeviceCtxPtr(pub *mut AVBufferRef);
+
+impl Default for HwDeviceCtxPtr {
+    fn default() -> Self {
+        Self(std::ptr::null_mut())
+    }
+}
+
+impl HwDeviceCtxPtr {
+    /// Creates a new `HwDeviceCtxPtr` from a raw pointer.
+    pub fn new(ptr: *mut AVBufferRef) -> Self {
+        Self(ptr)
+    }
+
+    /// Returns `true` if the pointer is null.
+    pub fn is_null(&self) -> bool {
+        self.0.is_null()
+    }
+}
+
 /// Represents an encoder.
 pub struct Encoder {
     incoming_time_base: Rational,
@@ -50,6 +73,8 @@ pub struct VideoEncoderSettings {
     /// `tune=zerolatency` and `max_b_frames(0)` to get truly non-buffering
     /// encoding (one packet out per frame in).
     low_delay: Option<bool>,
+    /// Color range: 1 = MPEG/TV (16-235), 2 = JPEG/Full (0-255).
+    color_range: Option<u32>,
 }
 
 impl VideoEncoderSettings {
@@ -83,6 +108,9 @@ impl VideoEncoderSettings {
         encoder.flags2 = self.flags2.unwrap_or(encoder.flags2);
         if self.low_delay.unwrap_or(false) {
             encoder.flags |= AV_CODEC_FLAG_LOW_DELAY as i32;
+        }
+        if let Some(cr) = self.color_range {
+            encoder.color_range = cr;
         }
 
         Ok(())
@@ -175,6 +203,46 @@ impl Encoder {
         outgoing_time_base: impl Into<Rational>,
         settings: impl Into<EncoderSettings>,
     ) -> Result<Self, FfmpegError> {
+        Self::new_inner(codec, output, incoming_time_base, outgoing_time_base, settings, None, None)
+    }
+
+    /// Creates a new encoder with a hardware device context.
+    /// The `hw_device_ctx` is assigned before `avcodec_open2` is called.
+    pub fn new_with_hw_device<T: Send + Sync>(
+        codec: EncoderCodec,
+        output: &mut Output<T>,
+        incoming_time_base: impl Into<Rational>,
+        outgoing_time_base: impl Into<Rational>,
+        settings: impl Into<EncoderSettings>,
+        hw_device_ctx: *mut AVBufferRef,
+    ) -> Result<Self, FfmpegError> {
+        Self::new_inner(codec, output, incoming_time_base, outgoing_time_base, settings, Some(hw_device_ctx), None)
+    }
+
+    /// Creates a new encoder with both hardware device and frames contexts.
+    /// Required by encoders like h264_nvenc that need `hw_frames_ctx` to know
+    /// the GPU frame pool layout when receiving GPU frames directly.
+    pub fn new_with_hw_contexts<T: Send + Sync>(
+        codec: EncoderCodec,
+        output: &mut Output<T>,
+        incoming_time_base: impl Into<Rational>,
+        outgoing_time_base: impl Into<Rational>,
+        settings: impl Into<EncoderSettings>,
+        hw_device_ctx: *mut AVBufferRef,
+        hw_frames_ctx: *mut AVBufferRef,
+    ) -> Result<Self, FfmpegError> {
+        Self::new_inner(codec, output, incoming_time_base, outgoing_time_base, settings, Some(hw_device_ctx), Some(hw_frames_ctx))
+    }
+
+    fn new_inner<T: Send + Sync>(
+        codec: EncoderCodec,
+        output: &mut Output<T>,
+        incoming_time_base: impl Into<Rational>,
+        outgoing_time_base: impl Into<Rational>,
+        settings: impl Into<EncoderSettings>,
+        hw_device_ctx: Option<*mut AVBufferRef>,
+        hw_frames_ctx: Option<*mut AVBufferRef>,
+    ) -> Result<Self, FfmpegError> {
         if codec.as_ptr().is_null() {
             return Err(FfmpegError::NoEncoder);
         }
@@ -214,6 +282,18 @@ impl Encoder {
 
         settings.apply(encoder_mut)?;
 
+        // Set hardware device context before avcodec_open2 if provided
+        if let Some(hw_ctx) = hw_device_ctx {
+            // Safety: av_buffer_ref creates a new reference to the buffer
+            encoder_mut.hw_device_ctx = unsafe { av_buffer_ref(hw_ctx) };
+        }
+
+        // Set hardware frames context before avcodec_open2 if provided.
+        // Required by nvenc when receiving GPU frames (CUDA pixel format).
+        if let Some(hw_frames) = hw_frames_ctx {
+            encoder_mut.hw_frames_ctx = unsafe { av_buffer_ref(hw_frames) };
+        }
+
         if global_header {
             encoder_mut.flags |= AV_CODEC_FLAG_GLOBAL_HEADER as i32;
         }
@@ -221,6 +301,67 @@ impl Encoder {
         // Safety: `avcodec_open2` is safe to call, 'encoder' and 'codec' and
         // 'codec_options_ptr' are a valid pointers.
         FfmpegErrorCode(unsafe { avcodec_open2(encoder_mut, codec.as_ptr(), codec_options_ptr) }).result()?;
+
+        // For VideoToolbox encoder: set MaxFrameDelayCount=0 to force synchronous output.
+        // Without this, VT buffers frames indefinitely (kVTUnlimitedFrameDelayCount=-1),
+        // requiring flush+recreate at every segment boundary.
+        // VTEncContext layout (ffmpeg 8.x): AVClass*(8) + codec_id(4) + pad(4) + session(8)
+        #[cfg(target_os = "macos")]
+        {
+            // Only apply to VideoToolbox encoders — check codec name
+            let codec_name = if !encoder_mut.codec.is_null() {
+                let name_ptr = unsafe { (*encoder_mut.codec).name };
+                if !name_ptr.is_null() {
+                    unsafe { std::ffi::CStr::from_ptr(name_ptr) }.to_str().unwrap_or("")
+                } else { "" }
+            } else { "" };
+            if codec_name.contains("videotoolbox") {
+            if !encoder_mut.priv_data.is_null() {
+                // session is the 3rd field in VTEncContext, at offset 16
+                let session_ptr = unsafe {
+                    *(encoder_mut.priv_data.cast::<u8>().add(16) as *const *const std::ffi::c_void)
+                };
+                if !session_ptr.is_null() {
+                    #[link(name = "VideoToolbox", kind = "framework")]
+                    #[link(name = "CoreFoundation", kind = "framework")]
+                    unsafe extern "C" {
+                        fn VTSessionSetProperty(
+                            session: *const std::ffi::c_void,
+                            key: *const std::ffi::c_void,
+                            value: *const std::ffi::c_void,
+                        ) -> i32;
+                        fn CFNumberCreate(
+                            allocator: *const std::ffi::c_void,
+                            the_type: isize,
+                            value_ptr: *const std::ffi::c_void,
+                        ) -> *const std::ffi::c_void;
+                        fn CFRelease(cf: *const std::ffi::c_void);
+                        static kVTCompressionPropertyKey_MaxFrameDelayCount: *const std::ffi::c_void;
+                    }
+                    unsafe {
+                        let zero: i32 = 0;
+                        // kCFNumberSInt32Type = 3
+                        let num = CFNumberCreate(
+                            std::ptr::null(),
+                            3,
+                            &zero as *const i32 as *const std::ffi::c_void,
+                        );
+                        if !num.is_null() {
+                            VTSessionSetProperty(
+                                session_ptr,
+                                kVTCompressionPropertyKey_MaxFrameDelayCount,
+                                num,
+                            );
+                            CFRelease(num);
+                        }
+                    }
+                }
+            }
+            }
+        }
+
+        // Use the post-open time_base for PTS conversion — encoders may change it during open.
+        let incoming_time_base: Rational = encoder_mut.time_base.into();
 
         // Safety: The pointer here is valid.
         let ost_mut = unsafe { NonNull::new(ost.as_mut_ptr()).ok_or(FfmpegError::NoStream)?.as_mut() };
@@ -814,7 +955,7 @@ mod tests {
             .expect("Failed to create video decoder");
         let mut output = Output::seekable(
             std::io::Cursor::new(Vec::new()),
-            OutputOptions::builder().format_name("mp4").unwrap().build(),
+            OutputOptions::builder().format_name("mpegts").unwrap().build(),
         )
         .expect("Failed to create Output");
         let mut encoder = Encoder::new(
@@ -888,7 +1029,7 @@ mod tests {
     fn test_pr_248() {
         let mut output = Output::seekable(
             std::io::Cursor::new(Vec::new()),
-            OutputOptions::builder().format_name("mp4").unwrap().build(),
+            OutputOptions::builder().format_name("mpegts").unwrap().build(),
         )
         .expect("Failed to create Output");
 
@@ -929,7 +1070,7 @@ mod tests {
 
         let mut output = Output::seekable(
             std::io::Cursor::new(Vec::new()),
-            OutputOptions::builder().format_name("mp4").unwrap().build(),
+            OutputOptions::builder().format_name("mpegts").unwrap().build(),
         )
         .expect("Failed to create Output");
 
@@ -997,5 +1138,100 @@ mod tests {
             "Expected one packet per frame with zerolatency tune, got {packets_received} packets for {frames_sent} frames",
         );
         assert!(frames_sent > 0, "Should have encoded at least one frame");
+    }
+
+    /// Per-frame packet output with zerolatency x264 and 144p scaling.
+    /// Matches the transcoder's exact config: mpegts output, no write_header,
+    /// no bitrate (CRF mode), tune=zerolatency, max_b_frames=0.
+    #[test]
+    fn test_encoder_per_frame_packet_output_144p() {
+        use crate::scaler::VideoScaler;
+
+        let codec = EncoderCodec::by_name("libx264").expect("libx264 encoder should be available");
+
+        let mut input = Input::open("../../assets/avc_aac.mp4").expect("Failed to open input file");
+        let streams = input.streams();
+        let video_stream = streams.best(AVMediaType::Video).expect("No video stream found");
+        let input_stream_index = video_stream.index();
+
+        let mut decoder = Decoder::new(&video_stream)
+            .expect("Failed to create decoder")
+            .video()
+            .expect("Failed to create video decoder");
+
+        let out_w = 256;
+        let out_h = 144;
+        let mut scaler = VideoScaler::new(
+            decoder.width(),
+            decoder.height(),
+            decoder.pixel_format(),
+            out_w,
+            out_h,
+            AVPixelFormat::Yuv420p,
+        )
+        .expect("Failed to create scaler");
+
+        let mut output = Output::seekable(
+            std::io::Cursor::new(Vec::new()),
+            OutputOptions::builder().format_name("mpegts").unwrap().build(),
+        )
+        .expect("Failed to create Output");
+
+        let mut codec_options = Dictionary::new();
+        codec_options.set("preset", "ultrafast").unwrap();
+        codec_options.set("tune", "zerolatency").unwrap();
+
+        let mut encoder = Encoder::new(
+            codec,
+            &mut output,
+            video_stream.time_base(),
+            AVRational { num: 1, den: 90_000 }, // MPEGTS timebase
+            VideoEncoderSettings::builder()
+                .width(out_w)
+                .height(out_h)
+                .frame_rate(decoder.frame_rate())
+                .pixel_format(AVPixelFormat::Yuv420p)
+                .gop_size(decoder.frame_rate().as_f64().ceil() as i32)
+                .max_b_frames(0)
+                .codec_specific_options(codec_options)
+                .low_delay(true)
+                .build(),
+        )
+        .expect("Failed to create encoder");
+
+        // No write_header — matching the transcoder's dummy output pattern.
+
+        let mut packets_per_frame: Vec<usize> = Vec::new();
+        let max_frames = 10;
+
+        'outer: while let Some(packet) = input.receive_packet().expect("receive_packet") {
+            if packet.stream_index() != input_stream_index {
+                continue;
+            }
+            decoder.send_packet(&packet).expect("send_packet");
+            while let Some(frame) = decoder.receive_frame().expect("receive_frame") {
+                let scaled = scaler.process(&frame).expect("scale");
+                encoder.send_frame(scaled).expect("send_frame");
+
+                let mut count = 0usize;
+                while let Some(_pkt) = encoder.receive_packet().expect("receive_packet") {
+                    count += 1;
+                }
+                packets_per_frame.push(count);
+
+                if packets_per_frame.len() >= max_frames {
+                    break 'outer;
+                }
+            }
+        }
+
+        // With tune=zerolatency + bframes=0, every frame must produce
+        // exactly 1 packet — including the very first one.
+        for (i, &count) in packets_per_frame.iter().enumerate() {
+            assert_eq!(
+                count, 1,
+                "Frame {i} produced {count} packets, expected 1 (per-frame: {packets_per_frame:?})",
+            );
+        }
     }
 }
