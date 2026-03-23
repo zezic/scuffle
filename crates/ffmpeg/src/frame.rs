@@ -158,10 +158,12 @@ unsafe impl Sync for GenericFrame {}
 
 /// A video frame. Thin wrapper around [`GenericFrame`]. Like a frame but has specific video properties.
 #[derive(Clone)]
+#[repr(transparent)]
 pub struct VideoFrame(GenericFrame);
 
 /// An audio frame. Thin wrapper around [`GenericFrame`]. Like a frame but has specific audio properties.
 #[derive(Clone)]
+#[repr(transparent)]
 pub struct AudioFrame(GenericFrame);
 
 impl GenericFrame {
@@ -223,6 +225,14 @@ impl GenericFrame {
     /// Make this frame an audio frame.
     pub(crate) const fn audio(self) -> AudioFrame {
         AudioFrame(self)
+    }
+
+    /// Borrow this frame as a `VideoFrame` reference.
+    /// Safe because `VideoFrame` is `#[repr(transparent)]` over `GenericFrame`.
+    pub fn as_video(&self) -> &VideoFrame {
+        // Safety: VideoFrame is repr(transparent) over GenericFrame,
+        // guaranteeing identical memory layout.
+        unsafe { &*(self as *const GenericFrame as *const VideoFrame) }
     }
 
     /// Returns the presentation timestamp of the frame, in `time_base` units.

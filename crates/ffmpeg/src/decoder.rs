@@ -279,11 +279,6 @@ unsafe extern "C" fn get_hw_format(ctx: *mut AVCodecContext, pix_fmts: *const i3
     }
 
     // HW format not available — return first software format so decoding still works
-    // Log this: if this happens with CUDA decoder, hw accel is silently disabled.
-    eprintln!(
-        "get_hw_format: preferred {:?} not in offered formats, falling back to {:?}",
-        preferred_format, first_format
-    );
     let fmt: i32 = first_format.unwrap_or(AVPixelFormat::None).into();
     fmt
 }
